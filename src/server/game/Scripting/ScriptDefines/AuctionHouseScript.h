@@ -18,8 +18,11 @@
 #ifndef SCRIPT_OBJECT_AUCTION_HOUSE_SCRIPT_H_
 #define SCRIPT_OBJECT_AUCTION_HOUSE_SCRIPT_H_
 
+#include "DatabaseEnvFwd.h"
 #include "ScriptObject.h"
 #include <vector>
+
+enum class AuctionFinalizationReason : uint8;
 
 enum AuctionHouseHook
 {
@@ -34,6 +37,7 @@ enum AuctionHouseHook
     AUCTIONHOUSEHOOK_ON_BEFORE_AUCTIONHOUSEMGR_SEND_AUCTION_OUTBIDDED_MAIL,
     AUCTIONHOUSEHOOK_ON_BEFORE_AUCTIONHOUSEMGR_SEND_AUCTION_CANCELLED_TO_BIDDER_MAIL,
     AUCTIONHOUSEHOOK_ON_BEFORE_AUCTIONHOUSEMGR_UPDATE,
+    AUCTIONHOUSEHOOK_ON_BEFORE_AUCTION_FINALIZATION,
     AUCTIONHOUSEHOOK_END
 };
 
@@ -75,6 +79,16 @@ public:
 
     // Called before updating the auctions
     virtual void OnBeforeAuctionHouseMgrUpdate() { }
+
+    // Called synchronously by DeleteFromDB before appending the auction deletion to the caller's transaction.
+    // Listeners may only append persistence to trans; do not commit, retain entry/trans, or mutate game state.
+    // This is not a commit notification: read back persisted records if a confirmed outcome is required.
+    // Unknown covers invalid-load cleanup and callers that omit the reason; never infer Sold from a bidder.
+    // Direct SQL cleanup at startup bypasses DeleteFromDB and is not observed by this hook.
+    // Entry may be invalid for Unknown (including a null auctionHouseEntry). Auction IDs can be reused on restart;
+    // modules needing historical identity must persist their own receipt identity in the same transaction.
+    virtual void OnBeforeAuctionFinalization(AuctionEntry const* /*entry*/, AuctionFinalizationReason /*reason*/,
+        CharacterDatabaseTransaction /*trans*/) { }
 };
 
 #endif

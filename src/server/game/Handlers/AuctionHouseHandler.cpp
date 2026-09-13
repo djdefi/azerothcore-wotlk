@@ -581,7 +581,7 @@ void WorldSession::HandleAuctionPlaceBid(WorldPacket& recvData)
             GetAccountId(), GetRemoteAddress(), player->GetName(), player->GetGUID().GetCounter(),
             auction->Id, auction->item_template, auction->itemCount, auction->buyout, auction->owner.GetCounter(), auction->owner.GetCounter());
 
-        auction->DeleteFromDB(trans);
+        auction->DeleteFromDB(trans, AuctionFinalizationReason::Sold);
 
         sAuctionMgr->RemoveAItem(auction->item_guid);
         auctionHouse->RemoveAuction(auction);
@@ -660,7 +660,7 @@ void WorldSession::HandleAuctionRemoveItem(WorldPacket& recvData)
     // Now remove the auction
 
     player->SaveInventoryAndGoldToDB(trans);
-    auction->DeleteFromDB(trans);
+    auction->DeleteFromDB(trans, AuctionFinalizationReason::Cancelled);
     CharacterDatabase.CommitTransaction(trans);
 
     sAuctionMgr->RemoveAItem(auction->item_guid);

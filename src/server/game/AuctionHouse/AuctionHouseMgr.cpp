@@ -534,15 +534,18 @@ void AuctionHouseObject::Update()
         if (auction->expire_time > checkTime)
             continue;
 
+        AuctionFinalizationReason reason;
         ///- Either cancel the auction if there was no bidder
         if (!auction->bidder)
         {
+            reason = AuctionFinalizationReason::Expired;
             sAuctionMgr->SendAuctionExpiredMail(auction, trans);
             sScriptMgr->OnAuctionExpire(this, auction);
         }
         ///- Or perform the transaction
         else
         {
+            reason = AuctionFinalizationReason::Sold;
             //we should send an "item sold" message if the seller is online
             //we send the item to the winner
             //we send the money to the seller
@@ -552,7 +555,7 @@ void AuctionHouseObject::Update()
         }
 
         ///- In any case clear the auction
-        auction->DeleteFromDB(trans);
+        auction->DeleteFromDB(trans, reason);
 
         sAuctionMgr->RemoveAItem(auction->item_guid);
         RemoveAuction(auction);
@@ -583,8 +586,10 @@ uint32 AuctionEntry::CalculateAuctionOutBid(uint32 bid)
     return outbid ? outbid : 1;
 }
 
-void AuctionEntry::DeleteFromDB(CharacterDatabaseTransaction trans) const
+void AuctionEntry::DeleteFromDB(CharacterDatabaseTransaction trans, AuctionFinalizationReason reason) const
 {
+    sScriptMgr->OnBeforeAuctionFinalization(this, reason, trans);
+
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_AUCTION);
     stmt->SetData(0, Id);
     trans->Append(stmt);
