@@ -23,6 +23,12 @@
 #include "MoveSplineInit.h"
 #include <optional>
 
+namespace Movement
+{
+    bool CanMovePointPath(Unit const& unit, uint32 id, PointsArray const& path, uint32 mapId, uint32 instanceId,
+        ForcedMovement forcedMovement, float speed, float orientation, bool backwards);
+}
+
 template<class T>
 class PointMovementGenerator : public MovementGeneratorMedium< T, PointMovementGenerator<T> >
 {
@@ -35,6 +41,9 @@ public:
         if (_path)
             m_precomputedPath = *_path;
     }
+
+    PointMovementGenerator(uint32 id, Movement::PointsArray const& path, Unit const& unit,
+        ForcedMovement forcedMovement, float speed, float orientation, bool backwards);
 
     void DoInitialize(T*);
     void DoFinalize(T*);
@@ -50,9 +59,30 @@ public:
     void unitSpeedChanged() override { i_recalculateSpeed = true; }
 
     MovementGeneratorType GetMovementGeneratorType() override { return POINT_MOTION_TYPE; }
+    uint32 GetSplineId() const override
+    {
+        return _checkedPath && _checkedPath->Launched ? _checkedPath->SplineId : 0;
+    }
 
     bool GetDestination(float& x, float& y, float& z) const { x = i_x; y = i_y; z = i_z; return true; }
 private:
+    struct CheckedPath
+    {
+        uint32 MapId;
+        uint32 InstanceId;
+        uint32 PhaseMask;
+        uint32 SplineId;
+        uint64 InterruptCount;
+        bool Launched = false;
+        bool Arrived = false;
+        bool Failed = false;
+    };
+
+    bool UpdateCheckedPath(T* unit, uint32 diff);
+    bool OwnsCheckedSpline(T const* unit) const;
+    bool FailCheckedPath(T* unit, char const* reason);
+    std::optional<CheckedPath> _checkedPath;
+
     uint32 id;
     float i_x, i_y, i_z;
     float speed;

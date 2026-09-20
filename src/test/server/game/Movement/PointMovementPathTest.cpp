@@ -1,0 +1,707 @@
+/*
+ * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ *
+ * This program is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation; either version 2 of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "CreatureAI.h"
+#include "MovementGenerator.h"
+#include "PointMovementGenerator.h"
+#include "TestCreature.h"
+#include "TestMap.h"
+#include "WorldMock.h"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <limits>
+
+using namespace testing;
+
+namespace
+{
+    class PointPathWorld : public WorldMock
+    {
+    public:
+        MOCK_METHOD(SQLQueryHolderCallback&, AddQueryHolderCallback, (SQLQueryHolderCallback&&), (override));
+    };
+
+    class PointPathMap : public TestMap
+    {
+    public:
+        void SetTestTerrain(std::shared_ptr<GridTerrainData> terrain)
+        {
+            auto coord = Acore::ComputeGridCoord(10.0f, 10.0f);
+            _mapGridManager.GetGrid(coord.x_coord, coord.y_coord)->SetTerrainData(std::move(terrain));
+        }
+
+        void RegisterCreature(Creature* creature)
+        {
+            Cell cell(creature->GetPositionX(), creature->GetPositionY());
+            EnsureGridCreated(GridCoord(cell.GridX(), cell.GridY()));
+            AddToGrid<Creature>(creature, cell);
+        }
+    };
+
+    class PointPathCreature : public TestCreature
+    {
+    public:
+        bool IsMovementPreventedByCasting() const override { return Casting; }
+        float GetCollisionHeight() const override { return 2.0f; }
+        float GetCollisionWidth() const override { return 1.0f; }
+        void ChangeMapId(uint32 mapId) { SetLocationMapId(mapId); }
+        void ChangeInstanceId(uint32 instanceId) { SetLocationInstanceId(instanceId); }
+        bool Casting = false;
+    };
+
+    class PointPathAI : public CreatureAI
+    {
+    public:
+        explicit PointPathAI(Creature* creature) : CreatureAI(creature) { }
+        void UpdateAI(uint32) override { }
+        void MovementInform(uint32 type, uint32 id) override { Arrivals.emplace_back(type, id); }
+        std::vector<std::pair<uint32, uint32>> Arrivals;
+    };
+
+    class PointMovementPathTest : public Test
+    {
+    protected:
+        void SetUp() override
+        {
+            _previousWorld = std::move(sWorld);
+            auto world = std::make_unique<NiceMock<PointPathWorld>>();
+            ON_CALL(*world, getIntConfig(_)).WillByDefault(Return(0));
+            ON_CALL(*world, getFloatConfig(_)).WillByDefault(Return(1.0f));
+            ON_CALL(*world, getBoolConfig(_)).WillByDefault(Return(false));
+            static std::string const empty;
+            ON_CALL(*world, GetDataPath()).WillByDefault(ReturnRef(empty));
+            sWorld = std::move(world);
+            TestMap::EnsureDBC();
+            if (!sMovementGeneratorRegistry->GetRegistryItem(IDLE_MOTION_TYPE))
+                (new IdleMovementFactory())->RegisterSelf();
+
+            _map = std::make_unique<PointPathMap>();
+            _unit = std::make_unique<PointPathCreature>();
+            _unit->SetupForCombatTest(_map.get(), 100, 100);
+            _unit->Relocate(10.0f, 10.0f, 10.0f);
+            _map->RegisterCreature(_unit.get());
+            _ai = new PointPathAI(_unit.get());
+            _unit->SetAI(_ai);
+            Motion()->MoveIdle();
+        }
+
+        void TearDown() override
+        {
+            _unit->CleanupCombatState();
+            _unit->RemoveFromGrid();
+            _unit.reset();
+            _map.reset();
+            sWorld = std::move(_previousWorld);
+        }
+
+        MotionMaster* Motion() const { return _unit->GetMotionMaster(); }
+
+        Movement::PointsArray Path() const
+        {
+            return {{10.0f, 10.0f, 10.0f}, {20.0f, 10.0f, 10.0f}, {20.0f, 20.0f, 10.0f}};
+        }
+
+        bool Dispatch(Movement::PointsArray const& path, bool backwards = false, float speed = 0.0f)
+        {
+            return Motion()->MovePointPath(42, path, _unit->GetMapId(), _unit->GetInstanceId(),
+                FORCED_MOVEMENT_RUN, speed, 1.0f, backwards);
+        }
+
+        void Advance(uint32 milliseconds)
+        {
+            auto& spline = *_unit->movespline;
+            spline.updateState(milliseconds);
+            auto position = spline.ComputePosition();
+            _unit->Relocate(position.x, position.y, position.z, position.orientation);
+            // The production Unit update disables the spline after its final position is reached.
+            if (spline.Finalized())
+                _unit->DisableSpline();
+        }
+
+        Movement::PointsArray SplinePath() const
+        {
+            auto const& spline = _unit->movespline->_Spline();
+            Movement::PointsArray result;
+            for (int32 i = spline.first(); i <= spline.last(); ++i)
+                result.push_back(spline.getPoint(i));
+            return result;
+        }
+
+        void ExpectRetired()
+        {
+            Motion()->UpdateMotion(1);
+            EXPECT_EQ(Motion()->GetMotionSlotType(MOTION_SLOT_ACTIVE), NULL_MOTION_TYPE);
+            EXPECT_TRUE(_ai->Arrivals.empty());
+        }
+
+        std::unique_ptr<IWorld> _previousWorld;
+        std::unique_ptr<PointPathMap> _map;
+        std::unique_ptr<PointPathCreature> _unit;
+        PointPathAI* _ai = nullptr;
+    };
+
+    // cppcheck-suppress syntaxError
+    TEST_F(PointMovementPathTest, CopiesExactPathAndNotifiesOnlyOnArrival)
+    {
+        auto path = Path();
+        ASSERT_TRUE(Dispatch(path));
+        EXPECT_EQ(Motion()->GetCurrentMovementGeneratorType(), POINT_MOTION_TYPE);
+        EXPECT_EQ(Motion()->GetCurrentSplineId(), _unit->movespline->GetId());
+        EXPECT_NE(Motion()->GetCurrentSplineId(), 0u);
+        EXPECT_EQ(SplinePath(), path);
+        path.back().x = 30.0f;
+        EXPECT_EQ(SplinePath(), Path());
+        EXPECT_TRUE(_ai->Arrivals.empty());
+        Advance(_unit->movespline->Duration());
+        Motion()->UpdateMotion(1);
+        ASSERT_EQ(_ai->Arrivals.size(), 1u);
+        EXPECT_EQ(_ai->Arrivals.front(), std::make_pair(uint32(POINT_MOTION_TYPE), 42u));
+        Motion()->UpdateMotion(1);
+        EXPECT_EQ(_ai->Arrivals.size(), 1u);
+    }
+
+    TEST_F(PointMovementPathTest, TwoPointsUseTheExactSuppliedSegment)
+    {
+        Movement::PointsArray path{{10.0f, 10.0f, 10.0f}, {10.0f, 10.0f, 20.0f}};
+        ASSERT_TRUE(Dispatch(path));
+        EXPECT_EQ(SplinePath(), path);
+        EXPECT_EQ(_unit->movespline->FinalDestination(), path.back());
+    }
+
+    TEST_F(PointMovementPathTest, RejectionDoesNotReplaceExistingMotion)
+    {
+        ASSERT_TRUE(Dispatch(Path()));
+        auto* owner = Motion()->top();
+        uint32 splineId = _unit->movespline->GetId();
+        float nan = std::numeric_limits<float>::quiet_NaN();
+        float inf = std::numeric_limits<float>::infinity();
+        std::vector<Movement::PointsArray> invalid{
+            {}, {{10, 10, 10}}, {{10, 10, 10}, {10, 10, 10}},
+            {{10, 10, 10}, {10, 10, 10}, {20, 10, 10}},
+            {{10, 10, 10}, {nan, 10, 10}}, {{10, 10, 10}, {inf, 10, 10}},
+            {{10, 10, 10}, {50000, 10, 10}}, {{10.02f, 10, 10}, {20, 10, 10}},
+            {{10, 10, 10}, {1000, 10, 10}, {20, 10, 10}}
+        };
+        for (auto const& path : invalid)
+        {
+            EXPECT_FALSE(Dispatch(path));
+            EXPECT_EQ(Motion()->top(), owner);
+            EXPECT_EQ(_unit->movespline->GetId(), splineId);
+        }
+        EXPECT_FALSE(Motion()->MovePointPath(42, Path(), 1, 0));
+        EXPECT_FALSE(Motion()->MovePointPath(42, Path(), 0, 1));
+        EXPECT_FALSE(Motion()->MovePointPath(EVENT_CHARGE, Path(), 0, 0));
+        EXPECT_FALSE(Motion()->MovePointPath(42, Path(), 0, 0, FORCED_MOVEMENT_MAX));
+        EXPECT_FALSE(Motion()->MovePointPath(42, Path(), 0, 0, FORCED_MOVEMENT_RUN, nan));
+        EXPECT_FALSE(Motion()->MovePointPath(42, Path(), 0, 0, FORCED_MOVEMENT_RUN, -1.0f));
+        EXPECT_FALSE(Motion()->MovePointPath(42, Path(), 0, 0, FORCED_MOVEMENT_RUN, 0.001f));
+        EXPECT_FALSE(Motion()->MovePointPath(42, Path(), 0, 0, FORCED_MOVEMENT_RUN, 0.0f, inf));
+        EXPECT_EQ(Motion()->top(), owner);
+        EXPECT_EQ(_unit->movespline->GetId(), splineId);
+    }
+
+    TEST_F(PointMovementPathTest, RejectsDisabledMovementAndNonGroundFrames)
+    {
+        auto* owner = Motion()->top();
+        _unit->SetUnitFlag(UNIT_FLAG_DISABLE_MOVE);
+        EXPECT_FALSE(Dispatch(Path()));
+        _unit->RemoveUnitFlag(UNIT_FLAG_DISABLE_MOVE);
+        for (auto flag : {MOVEMENTFLAG_ONTRANSPORT, MOVEMENTFLAG_SWIMMING, MOVEMENTFLAG_FLYING,
+            MOVEMENTFLAG_CAN_FLY, MOVEMENTFLAG_DISABLE_GRAVITY, MOVEMENTFLAG_FALLING,
+            MOVEMENTFLAG_FALLING_FAR, MOVEMENTFLAG_HOVER, MOVEMENTFLAG_WATERWALKING})
+        {
+            _unit->AddUnitMovementFlag(flag);
+            EXPECT_FALSE(Dispatch(Path()));
+            _unit->RemoveUnitMovementFlag(flag);
+        }
+        EXPECT_EQ(Motion()->top(), owner);
+        EXPECT_EQ(_unit->movespline->GetId(), 0u);
+    }
+
+    TEST_F(PointMovementPathTest, RootedInitializationDefersAndThenLaunches)
+    {
+        _unit->SetControlled(true, UNIT_STATE_ROOT);
+        ASSERT_TRUE(Dispatch(Path()));
+        EXPECT_EQ(Motion()->GetCurrentSplineId(), 0u);
+        Motion()->UpdateMotion(100);
+        EXPECT_EQ(Motion()->GetCurrentSplineId(), 0u);
+        _unit->SetControlled(false, UNIT_STATE_ROOT);
+        Motion()->UpdateMotion(1);
+        EXPECT_EQ(SplinePath(), Path());
+        EXPECT_NE(Motion()->GetCurrentSplineId(), 0u);
+    }
+
+    TEST_F(PointMovementPathTest, CastingDefersInitializationAndResumesFromAnActualStop)
+    {
+        _unit->Casting = true;
+        ASSERT_TRUE(Dispatch(Path()));
+        EXPECT_EQ(Motion()->GetCurrentSplineId(), 0u);
+        _unit->Casting = false;
+        Motion()->UpdateMotion(1);
+        Advance(500);
+        auto source = _unit->movespline->ComputePosition();
+        _unit->Casting = true;
+        Motion()->UpdateMotion(1);
+        ASSERT_TRUE(_unit->movespline->GetLastStop());
+        EXPECT_EQ(_unit->movespline->GetLastStop()->Position, G3D::Vector3(source));
+        _unit->Casting = false;
+        Motion()->UpdateMotion(1);
+        auto expected = Path();
+        expected.front() = source;
+        EXPECT_EQ(SplinePath(), expected);
+    }
+
+    TEST_F(PointMovementPathTest, RootAndStunResumeUsingExplicitStopProvenance)
+    {
+        for (UnitState state : {UNIT_STATE_ROOT, UNIT_STATE_STUNNED})
+        {
+            if (Motion()->GetMotionSlot(MOTION_SLOT_ACTIVE))
+                Motion()->MovementExpired();
+            _unit->Relocate(10, 10, 10);
+            ASSERT_TRUE(Dispatch(Path()));
+            Advance(500);
+            auto source = _unit->movespline->ComputePosition();
+            uint32 id = _unit->movespline->GetId();
+            _unit->SetControlled(true, state);
+            ASSERT_TRUE(_unit->movespline->GetLastStop());
+            EXPECT_EQ(_unit->movespline->GetLastStop()->SplineId, id);
+            Motion()->UpdateMotion(1);
+            EXPECT_TRUE(_unit->movespline->Finalized());
+            _unit->SetControlled(false, state);
+            Motion()->UpdateMotion(1);
+            auto expected = Path();
+            expected.front() = source;
+            EXPECT_EQ(SplinePath(), expected);
+            EXPECT_TRUE(_ai->Arrivals.empty());
+        }
+    }
+
+    TEST_F(PointMovementPathTest, PauseResumePreservesHairpinOrderIncludingRepeatedStops)
+    {
+        Movement::PointsArray path{{10, 10, 10}, {20, 10, 10}, {20, 10.02f, 10}, {10, 10.02f, 10},
+            {10, 10, 10}, {30, 10, 10}};
+        ASSERT_TRUE(Dispatch(path));
+        Advance(500);
+        auto source = _unit->movespline->ComputePosition();
+        _unit->PauseMovement(0, MOTION_SLOT_ACTIVE);
+        ASSERT_TRUE(_unit->movespline->GetLastStop());
+        auto stop = *_unit->movespline->GetLastStop();
+        _unit->StopMoving();
+        ASSERT_TRUE(_unit->movespline->GetLastStop());
+        EXPECT_EQ(_unit->movespline->GetLastStop()->SplineId, stop.SplineId);
+        Motion()->UpdateMotion(10000);
+        EXPECT_TRUE(_unit->movespline->Finalized());
+        _unit->ResumeMovement(0, MOTION_SLOT_ACTIVE);
+        Motion()->UpdateMotion(1);
+        path.front() = source;
+        EXPECT_EQ(SplinePath(), path);
+        EXPECT_FALSE(_unit->movespline->GetLastStop());
+    }
+
+    TEST_F(PointMovementPathTest, ClosedLoopResumesByProgressNotRepeatedCoordinates)
+    {
+        Movement::PointsArray path{{10, 10, 10}, {20, 10, 10}, {20, 20, 10}, {10, 10, 10}, {20, 10, 10}};
+        ASSERT_TRUE(Dispatch(path, false, 10.0f));
+        Advance(3500);
+        ASSERT_EQ(_unit->movespline->currentPathIdx(), 3);
+        auto source = _unit->movespline->ComputePosition();
+        _unit->PauseMovement(0, MOTION_SLOT_ACTIVE);
+        _unit->ResumeMovement(0, MOTION_SLOT_ACTIVE);
+        Motion()->UpdateMotion(1);
+        EXPECT_EQ(SplinePath(), (Movement::PointsArray{source, path.back()}));
+        EXPECT_EQ(_unit->movespline->currentPathIdx(), 3);
+    }
+
+    TEST_F(PointMovementPathTest, SpeedChangeMidLegKeepsTheNextCornerAndBackwardsSettings)
+    {
+        ASSERT_TRUE(Dispatch(Path(), true));
+        Advance(500);
+        auto source = _unit->movespline->ComputePosition();
+        _unit->SetSpeedRate(MOVE_RUN_BACK, 1.5f);
+        Motion()->propagateSpeedChange();
+        Motion()->UpdateMotion(1);
+        auto expected = Path();
+        expected.front() = source;
+        EXPECT_EQ(SplinePath(), expected);
+        EXPECT_FLOAT_EQ(_unit->movespline->Velocity(), _unit->GetSpeed(MOVE_RUN_BACK));
+        EXPECT_TRUE(_unit->HasUnitMovementFlag(MOVEMENTFLAG_BACKWARD));
+        _unit->PauseMovement(0, MOTION_SLOT_ACTIVE);
+        _unit->ResumeMovement(0, MOTION_SLOT_ACTIVE);
+        Motion()->UpdateMotion(1);
+        EXPECT_TRUE(_unit->HasUnitMovementFlag(MOVEMENTFLAG_BACKWARD));
+        Advance(_unit->movespline->Duration());
+        EXPECT_FLOAT_EQ(_unit->GetOrientation(), 1.0f);
+        Motion()->UpdateMotion(1);
+        EXPECT_EQ(_ai->Arrivals.size(), 1u);
+    }
+
+    TEST_F(PointMovementPathTest, HigherSlotDefersInitializationWithoutDiscardingIt)
+    {
+        Motion()->MoveDistract(10);
+        uint32 id = _unit->movespline->GetId();
+        ASSERT_TRUE(Dispatch(Path()));
+        EXPECT_EQ(_unit->movespline->GetId(), id);
+        EXPECT_EQ(Motion()->GetMotionSlotType(MOTION_SLOT_ACTIVE), POINT_MOTION_TYPE);
+        EXPECT_EQ(Motion()->GetCurrentMovementGeneratorType(), DISTRACT_MOTION_TYPE);
+        Motion()->UpdateMotion(11);
+        EXPECT_EQ(Motion()->GetCurrentMovementGeneratorType(), POINT_MOTION_TYPE);
+        EXPECT_EQ(SplinePath(), Path());
+    }
+
+    TEST_F(PointMovementPathTest, DisplacedDeferredSourceRetiresWithoutTouchingForeignSpline)
+    {
+        Motion()->MoveDistract(10);
+        ASSERT_TRUE(Dispatch(Path()));
+        _unit->Relocate(11, 10, 10);
+        Motion()->UpdateMotion(11);
+        uint32 foreignId = _unit->movespline->GetId();
+        ExpectRetired();
+        EXPECT_EQ(_unit->movespline->GetId(), foreignId);
+        EXPECT_FLOAT_EQ(_unit->GetPositionX(), 11.0f);
+    }
+
+    TEST_F(PointMovementPathTest, DeferredMapPhaseModeAndSpeedAreRechecked)
+    {
+        for (unsigned change = 0; change < 6; ++change)
+        {
+            _unit->Casting = true;
+            ASSERT_TRUE(Dispatch(Path()));
+            if (change == 0)
+                _unit->SetPhaseMask(2, false);
+            else if (change == 1)
+                _unit->AddUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+            else if (change == 2)
+                _unit->SetUnitFlag(UNIT_FLAG_DISABLE_MOVE);
+            else if (change == 3)
+                _unit->SetSpeedRate(MOVE_RUN, 0.0f);
+            else if (change == 4)
+                _unit->ChangeMapId(1);
+            else
+                _unit->ChangeInstanceId(1);
+            _unit->Casting = false;
+            ExpectRetired();
+            _unit->SetPhaseMask(1, false);
+            _unit->RemoveUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+            _unit->RemoveUnitFlag(UNIT_FLAG_DISABLE_MOVE);
+            _unit->SetSpeedRate(MOVE_RUN, 1.0f);
+            _unit->ChangeMapId(0);
+            _unit->ChangeInstanceId(0);
+        }
+    }
+
+    TEST_F(PointMovementPathTest, SamePositionTeleportInvalidatesDeferredProof)
+    {
+        _unit->Casting = true;
+        ASSERT_TRUE(Dispatch(Path()));
+        _unit->NearTeleportTo(10, 10, 10, 0);
+        _unit->Casting = false;
+        ExpectRetired();
+        EXPECT_EQ(Motion()->GetCurrentSplineId(), 0u);
+    }
+
+    TEST_F(PointMovementPathTest, SamePositionTeleportAfterStopInvalidatesProgress)
+    {
+        ASSERT_TRUE(Dispatch(Path()));
+        Advance(500);
+        _unit->PauseMovement(0, MOTION_SLOT_ACTIVE);
+        _unit->NearTeleportTo(_unit->GetPositionX(), _unit->GetPositionY(), _unit->GetPositionZ(), 0);
+        _unit->ResumeMovement(0, MOTION_SLOT_ACTIVE);
+        ExpectRetired();
+    }
+
+    TEST_F(PointMovementPathTest, OffCorridorDisplacementDoesNotSnapBack)
+    {
+        ASSERT_TRUE(Dispatch(Path()));
+        Advance(500);
+        _unit->Relocate(12, 15, 10);
+        ExpectRetired();
+        EXPECT_FLOAT_EQ(_unit->GetPositionX(), 12.0f);
+        EXPECT_FLOAT_EQ(_unit->GetPositionY(), 15.0f);
+        EXPECT_TRUE(_unit->movespline->Finalized());
+        EXPECT_FALSE(_unit->movespline->Initialized());
+    }
+
+    TEST_F(PointMovementPathTest, StoppedSourceCannotSkipToALaterLoopSegment)
+    {
+        auto path = Path();
+        path.push_back({10, 10, 10});
+        ASSERT_TRUE(Dispatch(path));
+        Advance(500);
+        _unit->PauseMovement(0, MOTION_SLOT_ACTIVE);
+        _unit->Relocate(20, 15, 10);
+        _unit->ResumeMovement(0, MOTION_SLOT_ACTIVE);
+        ExpectRetired();
+        EXPECT_FLOAT_EQ(_unit->GetPositionY(), 15.0f);
+    }
+
+    TEST_F(PointMovementPathTest, ModeChangeAfterInterruptionRetires)
+    {
+        ASSERT_TRUE(Dispatch(Path()));
+        Advance(500);
+        _unit->PauseMovement(0, MOTION_SLOT_ACTIVE);
+        _unit->AddUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
+        _unit->ResumeMovement(0, MOTION_SLOT_ACTIVE);
+        ExpectRetired();
+        _unit->RemoveUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
+    }
+
+    TEST_F(PointMovementPathTest, ForcedStopCannotLaunchAnUncheckedFrameConnector)
+    {
+        ASSERT_TRUE(Dispatch(Path()));
+        Advance(500);
+        _unit->AddUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
+        _unit->m_movementInfo.transport.guid = ObjectGuid::Create<HighGuid::Transport>(1, 1);
+        _unit->m_movementInfo.transport.pos.Relocate(100, 200, 300);
+        ExpectRetired();
+        EXPECT_TRUE(_unit->movespline->Finalized());
+        EXPECT_FALSE(_unit->movespline->Initialized());
+        EXPECT_FALSE(_unit->movespline->GetLastStop());
+        _unit->RemoveUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
+        _unit->m_movementInfo.transport.guid.Clear();
+    }
+
+    TEST_F(PointMovementPathTest, MapPhaseAndSpeedChangesAfterStopRetire)
+    {
+        for (unsigned change = 0; change < 4; ++change)
+        {
+            _unit->Relocate(10, 10, 10);
+            ASSERT_TRUE(Dispatch(Path()));
+            Advance(500);
+            _unit->PauseMovement(0, MOTION_SLOT_ACTIVE);
+            if (change == 0)
+                _unit->ChangeMapId(1);
+            else if (change == 1)
+                _unit->ChangeInstanceId(1);
+            else if (change == 2)
+                _unit->SetPhaseMask(2, false);
+            else
+                _unit->SetSpeedRate(MOVE_RUN, 0.0f);
+            _unit->ResumeMovement(0, MOTION_SLOT_ACTIVE);
+            ExpectRetired();
+            _unit->ChangeMapId(0);
+            _unit->ChangeInstanceId(0);
+            _unit->SetPhaseMask(1, false);
+            _unit->SetSpeedRate(MOVE_RUN, 1.0f);
+        }
+    }
+
+    TEST_F(PointMovementPathTest, TimedPauseDoesNotRestartBeforeItsDeadline)
+    {
+        ASSERT_TRUE(Dispatch(Path()));
+        Advance(500);
+        auto source = _unit->movespline->ComputePosition();
+        _unit->PauseMovement(100, MOTION_SLOT_ACTIVE);
+        Motion()->UpdateMotion(99);
+        EXPECT_TRUE(_unit->movespline->Finalized());
+        Motion()->UpdateMotion(1);
+        EXPECT_FALSE(_unit->movespline->Finalized());
+        auto expected = Path();
+        expected.front() = source;
+        EXPECT_EQ(SplinePath(), expected);
+    }
+
+    TEST_F(PointMovementPathTest, DefaultStopPreservesLegacyProgressAndRepeatedStopIsANoop)
+    {
+        ASSERT_TRUE(Dispatch(Path()));
+        _unit->movespline->updateState(500);
+        auto expected = _unit->movespline->ComputePosition();
+        uint32 ownedId = _unit->movespline->GetId();
+        uint64 interruptCount = _unit->movespline->GetInterruptCount();
+        Movement::MoveSplineInit stop(_unit.get());
+        stop.Stop();
+        EXPECT_TRUE(_unit->movespline->Finalized());
+        EXPECT_FALSE(_unit->movespline->Initialized());
+        ASSERT_TRUE(_unit->movespline->GetLastStop());
+        EXPECT_EQ(_unit->movespline->GetLastStop()->SplineId, ownedId);
+        EXPECT_EQ(_unit->movespline->GetLastStop()->Position, G3D::Vector3(expected));
+        EXPECT_EQ(_unit->movespline->GetLastStop()->PathIndex, 0);
+        EXPECT_EQ(_unit->movespline->GetInterruptCount(), interruptCount);
+        EXPECT_FLOAT_EQ(_unit->GetPositionX(), 10.0f);
+        uint32 stoppedId = _unit->movespline->GetId();
+        Movement::MoveSplineInit repeated(_unit.get());
+        repeated.Stop();
+        EXPECT_EQ(_unit->movespline->GetId(), stoppedId);
+        EXPECT_EQ(_unit->movespline->GetLastStop()->SplineId, ownedId);
+    }
+
+    TEST_F(PointMovementPathTest, ForcedStopInvalidatesProvenanceWithoutRelocationOrLaunch)
+    {
+        ASSERT_TRUE(Dispatch(Path()));
+        Advance(500);
+        _unit->Relocate(12, 15, 10);
+        uint64 interruptCount = _unit->movespline->GetInterruptCount();
+        Movement::MoveSplineInit stop(_unit.get());
+        stop.Stop(true);
+        EXPECT_TRUE(_unit->movespline->Finalized());
+        EXPECT_FALSE(_unit->movespline->Initialized());
+        EXPECT_FALSE(_unit->movespline->GetLastStop());
+        EXPECT_EQ(_unit->movespline->GetInterruptCount(), interruptCount + 1);
+        EXPECT_FLOAT_EQ(_unit->GetPositionX(), 12.0f);
+        EXPECT_FLOAT_EQ(_unit->GetPositionY(), 15.0f);
+        EXPECT_FALSE(_unit->HasUnitMovementFlag(MOVEMENTFLAG_SPLINE_ENABLED));
+    }
+
+    TEST_F(PointMovementPathTest, InvalidatingAnAlreadyStoppedPathDoesNotCreateAnotherSpline)
+    {
+        ASSERT_TRUE(Dispatch(Path()));
+        _unit->PauseMovement(0, MOTION_SLOT_ACTIVE);
+        uint32 stoppedId = _unit->movespline->GetId();
+        _unit->Relocate(12, 15, 10);
+        ExpectRetired();
+        EXPECT_EQ(_unit->movespline->GetId(), stoppedId);
+        EXPECT_TRUE(_unit->movespline->Finalized());
+        EXPECT_FALSE(_unit->movespline->Initialized());
+    }
+
+    TEST_F(PointMovementPathTest, SpeedChangeOnFinalLegStillDispatchesTwoPoints)
+    {
+        ASSERT_TRUE(Dispatch(Path(), false, 10.0f));
+        Advance(1500);
+        auto source = _unit->movespline->ComputePosition();
+        Motion()->propagateSpeedChange();
+        Motion()->UpdateMotion(1);
+        EXPECT_EQ(SplinePath(), (Movement::PointsArray{source, Path().back()}));
+    }
+
+    TEST_F(PointMovementPathTest, ClosedPathIsNotMistakenForANoop)
+    {
+        auto path = Path();
+        path.push_back(path.front());
+        ASSERT_TRUE(Dispatch(path));
+        EXPECT_EQ(SplinePath(), path);
+        Advance(_unit->movespline->Duration());
+        Motion()->UpdateMotion(1);
+        EXPECT_EQ(_ai->Arrivals.size(), 1u);
+    }
+
+    TEST_F(PointMovementPathTest, ForeignSplineIsNotStoppedOrReportedAsArrival)
+    {
+        ASSERT_TRUE(Dispatch(Path()));
+        Movement::MoveSplineInit foreign(_unit.get());
+        foreign.MovebyPath({{10, 10, 10}, {15, 15, 10}});
+        ASSERT_GT(foreign.Launch(), 0);
+        uint32 id = _unit->movespline->GetId();
+        _unit->AddUnitState(UNIT_STATE_ROAMING | UNIT_STATE_ROAMING_MOVE);
+        // Avoid Idle::Reset, which is independent of the strict generator's ownership checks.
+        auto* generator = Motion()->top();
+        EXPECT_FALSE(generator->Update(_unit.get(), 1));
+        generator->Finalize(_unit.get());
+        EXPECT_EQ(_unit->movespline->GetId(), id);
+        EXPECT_FALSE(_unit->movespline->Finalized());
+        EXPECT_TRUE(_unit->HasUnitState(UNIT_STATE_ROAMING_MOVE));
+        EXPECT_TRUE(_ai->Arrivals.empty());
+    }
+
+    TEST_F(PointMovementPathTest, FinalizingCoveredPointLeavesForeignGeneratorAndSplineUntouched)
+    {
+        ASSERT_TRUE(Dispatch(Path()));
+        Motion()->MovePoint(99, 15, 15, 10, FORCED_MOVEMENT_RUN, 0, 0, false, false, MOTION_SLOT_CONTROLLED);
+        auto* foreign = Motion()->top();
+        uint32 splineId = _unit->movespline->GetId();
+        Motion()->MovementExpiredOnSlot(MOTION_SLOT_ACTIVE, false);
+        EXPECT_EQ(Motion()->top(), foreign);
+        EXPECT_EQ(_unit->movespline->GetId(), splineId);
+        EXPECT_FALSE(_unit->movespline->Finalized());
+        EXPECT_TRUE(_unit->HasUnitState(UNIT_STATE_ROAMING_MOVE));
+        EXPECT_TRUE(_ai->Arrivals.empty());
+    }
+
+    TEST_F(PointMovementPathTest, ReplacingAnAcceptedPathAndCancellingDoNotReportArrival)
+    {
+        ASSERT_TRUE(Dispatch(Path()));
+        auto replacement = Path();
+        replacement.back() = {25, 25, 10};
+        ASSERT_TRUE(Dispatch(replacement));
+        EXPECT_EQ(SplinePath(), replacement);
+        Motion()->MovementExpired();
+        EXPECT_TRUE(_unit->movespline->Finalized());
+        EXPECT_TRUE(_ai->Arrivals.empty());
+    }
+
+    TEST_F(PointMovementPathTest, SourceToleranceIsNumericalNotANormalizedHeightSnap)
+    {
+        auto path = Path();
+        path.front().z += 0.005f;
+        ASSERT_TRUE(Dispatch(path));
+        EXPECT_EQ(SplinePath(), Path());
+        Motion()->MovementExpired();
+        path.front().z = 10.02f;
+        EXPECT_FALSE(Dispatch(path));
+        path.front().z = 10.5f;
+        EXPECT_FALSE(Dispatch(path));
+        // An explicitly checked actual-source connector is part of the proof, not inserted by the core.
+        path.insert(path.begin(), {10, 10, 10});
+        ASSERT_TRUE(Dispatch(path));
+        EXPECT_EQ(SplinePath(), path);
+    }
+
+    TEST_F(PointMovementPathTest, ProductionNormalizationRequiresAnExplicitlyCheckedSourceConnector)
+    {
+        struct TerrainFixture
+        {
+            std::filesystem::path File = std::filesystem::temp_directory_path() /
+                ("ac-point-path-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+                    ".map");
+            ~TerrainFixture() { std::filesystem::remove(File); }
+        } fixture;
+        map_fileheader header{};
+        header.mapMagic = MapMagic.asUInt;
+        header.versionMagic = MapVersionMagic;
+        header.heightMapOffset = sizeof(header);
+        header.heightMapSize = sizeof(map_heightHeader);
+        map_heightHeader height{MapHeightMagic.asUInt, MAP_HEIGHT_NO_HEIGHT, 10.0f, 10.0f};
+        {
+            std::ofstream file(fixture.File, std::ios::binary);
+            file.write(reinterpret_cast<char const*>(&header), sizeof(header));
+            file.write(reinterpret_cast<char const*>(&height), sizeof(height));
+            ASSERT_TRUE(file.good());
+        }
+        auto terrain = std::make_shared<GridTerrainData>();
+        ASSERT_EQ(terrain->Load(fixture.File.string()), TerrainMapDataReadResult::Success);
+        _map->SetTestTerrain(std::move(terrain));
+        PathGenerator ground(_unit.get());
+        ASSERT_TRUE(ground.CalculatePath(20, 10, 10));
+        ASSERT_EQ(ground.GetPath().front(), G3D::Vector3(10, 10, 10));
+        ASSERT_TRUE(Dispatch(ground.GetPath()));
+        EXPECT_EQ(SplinePath(), ground.GetPath());
+        Motion()->MovementExpired();
+
+        _unit->Relocate(10, 10, 10.5f);
+        PathGenerator normalized(_unit.get());
+        ASSERT_TRUE(normalized.CalculatePath(20, 10, 10));
+        EXPECT_EQ(normalized.GetPath().front(), G3D::Vector3(10, 10, 10));
+        EXPECT_FALSE(Dispatch(normalized.GetPath()));
+        // The fixture exercises source normalization, not navmesh/collision certification by the caller.
+        auto checked = normalized.GetPath();
+        checked.insert(checked.begin(), {10, 10, 10.5f});
+        ASSERT_TRUE(Dispatch(checked));
+        EXPECT_EQ(SplinePath(), checked);
+    }
+
+    TEST_F(PointMovementPathTest, LegacyPointRetainsItsExistingEndpointBehavior)
+    {
+        Motion()->MovePoint(7, 20, 10, 10, FORCED_MOVEMENT_RUN, 0, 0, false);
+        EXPECT_EQ(Motion()->GetCurrentMovementGeneratorType(), POINT_MOTION_TYPE);
+        EXPECT_EQ(Motion()->GetCurrentSplineId(), 0u);
+        EXPECT_EQ(_unit->movespline->FinalDestination(), G3D::Vector3(20, 10, 10));
+        Advance(_unit->movespline->Duration());
+        Motion()->UpdateMotion(1);
+        ASSERT_EQ(_ai->Arrivals.size(), 1u);
+        EXPECT_EQ(_ai->Arrivals.front().second, 7u);
+    }
+}

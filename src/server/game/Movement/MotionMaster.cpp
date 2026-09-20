@@ -500,6 +500,27 @@ void MotionMaster::MovePoint(uint32 id, float x, float y, float z, ForcedMovemen
     }
 }
 
+bool MotionMaster::MovePointPath(uint32 id, Movement::PointsArray const& path, uint32 mapId, uint32 instanceId,
+    ForcedMovement forcedMovement, float speed, float orientation, bool backwards)
+{
+    if (!Movement::CanMovePointPath(*_owner, id, path, mapId, instanceId,
+        forcedMovement, speed, orientation, backwards))
+    {
+        LOG_DEBUG("movement.motionmaster", "Rejected checked point path for {} (Id: {})",
+            _owner->GetGUID().ToString(), id);
+        return false;
+    }
+
+    if (_owner->IsPlayer())
+        Mutate(new PointMovementGenerator<Player>(id, path, *_owner, forcedMovement, speed, orientation, backwards),
+            MOTION_SLOT_ACTIVE);
+    else
+        Mutate(new PointMovementGenerator<Creature>(id, path, *_owner, forcedMovement, speed, orientation, backwards),
+            MOTION_SLOT_ACTIVE);
+
+    return true;
+}
+
 void MotionMaster::MoveSplinePath(Movement::PointsArray* path, ForcedMovement forcedMovement)
 {
     // Xinef: do not allow to move with UNIT_FLAG_DISABLE_MOVE

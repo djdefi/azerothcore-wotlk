@@ -157,6 +157,11 @@ namespace Movement
 
     void MoveSpline::Initialize(MoveSplineInitArgs const& args)
     {
+        // StopMoving discards the spline. Retain its ordered progress, not a spatial guess at a later restart.
+        _lastStop.reset();
+        if (args.flags.done && Initialized() && !Finalized())
+            _lastStop = StopInfo{GetId(), currentPathIdx(), ComputePosition()};
+
         splineflags = args.flags;
         facing = args.facing;
         m_Id = args.splineId;

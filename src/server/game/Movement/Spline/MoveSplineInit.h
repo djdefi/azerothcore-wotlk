@@ -71,6 +71,8 @@ namespace Movement
         /*  Final pass of initialization that stops movement.
          */
         void Stop();
+        // Stop at the current coordinate frame without resuming or recording an invalidated spline.
+        void Stop(bool forceCurrentPosition);
 
         /* Adds movement by parabolic trajectory
          * @param amplitude  - the maximum height of parabola, value could be negative and positive

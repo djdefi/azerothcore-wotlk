@@ -18,6 +18,7 @@
 #include "PointMovementGenerator.h"
 #include "Creature.h"
 #include "CreatureAI.h"
+#include "Log.h"
 #include "MoveSpline.h"
 #include "MoveSplineInit.h"
 #include "ObjectAccessor.h"
@@ -25,10 +26,279 @@
 #include "World.h"
 #include <limits>
 
+namespace
+{
+    constexpr float PointPathTolerance = 0.01f;
+    constexpr float PointPathToleranceSq = PointPathTolerance * PointPathTolerance;
+
+    G3D::Vector3 PointPathPosition(Unit const& unit)
+    {
+        return {unit.GetPositionX(), unit.GetPositionY(), unit.GetPositionZ()};
+    }
+
+    bool SamePointPathPosition(G3D::Vector3 const& left, G3D::Vector3 const& right)
+    {
+        return (left - right).squaredLength() <= PointPathToleranceSq;
+    }
+
+    bool PointPathContext(Unit const& unit, uint32 mapId, uint32 instanceId)
+    {
+        return unit.IsInWorld() && unit.IsAlive() && unit.FindMap() &&
+            unit.GetMapId() == mapId && unit.GetInstanceId() == instanceId &&
+            !unit.HasUnitFlag(UNIT_FLAG_DISABLE_MOVE) && !unit.HasUnitState(UNIT_STATE_IN_FLIGHT) &&
+            !unit.GetTransport() && !unit.GetVehicle() && !unit.GetTransGUID() && !unit.movespline->onTransport &&
+            !unit.HasUnitMovementFlag(MovementFlags(MOVEMENTFLAG_ONTRANSPORT | MOVEMENTFLAG_SWIMMING |
+                MOVEMENTFLAG_FLYING | MOVEMENTFLAG_CAN_FLY | MOVEMENTFLAG_DISABLE_GRAVITY |
+                MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR | MOVEMENTFLAG_HOVER | MOVEMENTFLAG_WATERWALKING)) &&
+            (!unit.IsPlayer() || !unit.ToPlayer()->IsBeingTeleported());
+    }
+
+    float PointPathSpeed(Unit const& unit, ForcedMovement forced, float speed, bool backwards)
+    {
+        uint32 flags = unit.m_movementInfo.GetMovementFlags();
+        if (forced == FORCED_MOVEMENT_WALK)
+            flags |= MOVEMENTFLAG_WALKING;
+        else if (forced == FORCED_MOVEMENT_RUN)
+            flags &= ~MOVEMENTFLAG_WALKING;
+
+        if (backwards)
+            flags |= MOVEMENTFLAG_BACKWARD;
+        else
+            flags &= ~MOVEMENTFLAG_BACKWARD;
+
+        float velocity = speed > 0.0f ? speed : unit.GetSpeed(Movement::SelectSpeedType(flags));
+        float runSpeed = unit.GetSpeed(MOVE_RUN);
+        if (!std::isfinite(velocity) || !std::isfinite(runSpeed))
+            return 0.0f;
+
+        return std::min(velocity, std::max(28.0f, runSpeed * 4.0f));
+    }
+
+    bool PointPathGeometry(Movement::PointsArray const& path, float velocity)
+    {
+        if (path.size() < 2 || path.size() > MAX_POINT_PATH_LENGTH || velocity <= 0.01f)
+            return false;
+
+        double length = 0.0;
+        G3D::Vector3 middle = (path.front() + path.back()) * 0.5f;
+        for (std::size_t i = 0; i < path.size(); ++i)
+        {
+            auto const& point = path[i];
+            if (!Acore::IsValidMapCoord(point.x, point.y, point.z))
+                return false;
+
+            if (i)
+            {
+                float segment = (point - path[i - 1]).length();
+                if (!std::isfinite(segment) || segment <= PointPathTolerance)
+                    return false;
+                length += segment;
+            }
+
+            // The linear monster-move packet packs intermediate offsets in signed 11/11/10-bit quarter yards.
+            if (i && i + 1 < path.size() &&
+                (std::abs(point.x - middle.x) >= 256.0f || std::abs(point.y - middle.y) >= 256.0f ||
+                    std::abs(point.z - middle.z) >= 128.0f))
+                return false;
+        }
+
+        return length * 1000.0 / velocity < std::numeric_limits<int32>::max() - path.size();
+    }
+
+    bool OnPointPathSegment(G3D::Vector3 const& point, G3D::Vector3 const& start, G3D::Vector3 const& end)
+    {
+        G3D::Vector3 delta = end - start;
+        float fraction = (point - start).dot(delta) / delta.squaredLength();
+        return SamePointPathPosition(point, start + delta * std::clamp(fraction, 0.0f, 1.0f));
+    }
+}
+
+bool Movement::CanMovePointPath(Unit const& unit, uint32 id, PointsArray const& path, uint32 mapId,
+    uint32 instanceId, ForcedMovement forcedMovement, float speed, float orientation, bool backwards)
+{
+    if (id == EVENT_CHARGE || id == EVENT_CHARGE_PREPATH ||
+        forcedMovement < FORCED_MOVEMENT_NONE || forcedMovement >= FORCED_MOVEMENT_MAX ||
+        !std::isfinite(speed) || speed < 0.0f || (speed > 0.0f && speed <= 0.01f) ||
+        !std::isfinite(orientation) || orientation < 0.0f ||
+        !PointPathContext(unit, mapId, instanceId) ||
+        !PointPathGeometry(path, PointPathSpeed(unit, forcedMovement, speed, backwards)))
+        return false;
+
+    G3D::Vector3 source = PointPathPosition(unit);
+    if (!SamePointPathPosition(source, path.front()))
+        return false;
+
+    // Launch uses ComputePosition rather than the stored Unit position while another spline is running.
+    return unit.movespline->Finalized() ||
+        SamePointPathPosition(unit.movespline->ComputePosition(), path.front());
+}
+
+template<class T>
+PointMovementGenerator<T>::PointMovementGenerator(uint32 pointId, Movement::PointsArray const& path,
+    Unit const& unit, ForcedMovement forcedMovement, float velocity, float orientation, bool backwards)
+    : PointMovementGenerator(pointId, path.back().x, path.back().y, path.back().z, forcedMovement, velocity,
+        orientation, &path, false, false, std::nullopt, ObjectGuid::Empty, backwards)
+{
+    _checkedPath = CheckedPath{unit.GetMapId(), unit.GetInstanceId(), unit.GetPhaseMask(),
+        unit.movespline->GetId(), unit.movespline->GetInterruptCount()};
+}
+
+template<class T>
+bool PointMovementGenerator<T>::OwnsCheckedSpline(T const* unit) const
+{
+    auto const& stop = unit->movespline->GetLastStop();
+    return _checkedPath->Launched && (unit->movespline->GetId() == _checkedPath->SplineId ||
+        (stop && stop->SplineId == _checkedPath->SplineId));
+}
+
+template<class T>
+bool PointMovementGenerator<T>::FailCheckedPath(T* unit, char const* reason)
+{
+    _checkedPath->Failed = true;
+    LOG_DEBUG("movement.motionmaster", "Retiring checked point path for {} (Id: {}): {}",
+        unit->GetGUID().ToString(), id, reason);
+    if (OwnsCheckedSpline(unit))
+    {
+        // A displaced source must not be relocated back to the old spline by StopMoving().
+        if (!unit->movespline->Finalized())
+        {
+            Movement::MoveSplineInit init(unit);
+            init.Stop(true);
+        }
+        unit->ClearUnitState(UNIT_STATE_ROAMING | UNIT_STATE_ROAMING_MOVE);
+    }
+    return false;
+}
+
+template<class T>
+bool PointMovementGenerator<T>::UpdateCheckedPath(T* unit, uint32 diff)
+{
+    auto& checked = *_checkedPath;
+    if (checked.Failed)
+        return false;
+
+    if (!PointPathContext(*unit, checked.MapId, checked.InstanceId) ||
+        unit->GetPhaseMask() != checked.PhaseMask ||
+        PointPathSpeed(*unit, _forcedMovement, speed, _reverseOrientation) <= 0.01f)
+        return FailCheckedPath(unit, "map, phase, movement mode or speed changed");
+
+    auto const& spline = *unit->movespline;
+    G3D::Vector3 source = PointPathPosition(*unit);
+    std::size_t next = 1;
+    bool stopped = false;
+    if (!checked.Launched)
+    {
+        auto const& stop = spline.GetLastStop();
+        bool sameSpline = spline.GetId() == checked.SplineId || (stop && stop->SplineId == checked.SplineId);
+        // A covering distract generator can finish by turning in place; this does not alter the source proof.
+        bool orientationOnly = spline.Initialized() && spline._Spline().last() - spline._Spline().first() == 1 &&
+            spline._Spline().getPoint(spline._Spline().first()) == source && spline.FinalDestination() == source;
+        if ((!sameSpline && !orientationOnly) || spline.GetInterruptCount() != checked.InterruptCount ||
+            !SamePointPathPosition(source, m_precomputedPath.front()) ||
+            (!spline.Finalized() && !SamePointPathPosition(spline.ComputePosition(), m_precomputedPath.front())))
+            return FailCheckedPath(unit, "source changed before launch");
+    }
+    else if (spline.GetId() == checked.SplineId && spline.Initialized())
+    {
+        bool arrived = spline.Finalized() && spline.timePassed() == spline.Duration();
+        // Unit::UpdateSplineMovement calls DisableSpline once on natural arrival.
+        if (spline.GetInterruptCount() != checked.InterruptCount &&
+            !(arrived && spline.GetInterruptCount() == checked.InterruptCount + 1))
+            return FailCheckedPath(unit, "spline interrupted");
+
+        if (!SamePointPathPosition(source, spline.ComputePosition()))
+            return FailCheckedPath(unit, "source left owned spline");
+
+        if (arrived)
+        {
+            checked.Arrived = true;
+            return false;
+        }
+        if (spline.Finalized())
+            return FailCheckedPath(unit, "spline interrupted before arrival");
+
+        source = spline.ComputePosition();
+        next = spline.currentPathIdx() + 1;
+    }
+    else
+    {
+        auto const& stop = spline.GetLastStop();
+        if (!stop || stop->SplineId != checked.SplineId ||
+            spline.GetInterruptCount() != checked.InterruptCount ||
+            !SamePointPathPosition(source, stop->Position))
+            return FailCheckedPath(unit, "owned stop provenance lost or source displaced");
+
+        next = stop->PathIndex + 1;
+        stopped = true;
+    }
+
+    if (next >= m_precomputedPath.size() ||
+        !OnPointPathSegment(source, m_precomputedPath[next - 1], m_precomputedPath[next]))
+        return FailCheckedPath(unit, "source left ordered checked segment");
+
+    if (unit->HasUnitState(UNIT_STATE_NOT_MOVE) || unit->HasUnitMovementFlag(MOVEMENTFLAG_ROOT) ||
+        unit->IsMovementPreventedByCasting())
+    {
+        if (!spline.Finalized())
+            unit->StopMoving();
+        return true;
+    }
+
+    if (_pauseTime)
+    {
+        if (diff < static_cast<uint32>(*_pauseTime))
+        {
+            *_pauseTime -= diff;
+            return true;
+        }
+        _pauseTime.reset();
+        _hasBeenStalled = false;
+        i_recalculateSpeed = true;
+    }
+    if (_stalled)
+        return true;
+
+    if (checked.Launched && !stopped && !i_recalculateSpeed)
+        return true;
+
+    Movement::PointsArray remaining{source};
+    remaining.insert(remaining.end(), m_precomputedPath.begin() + next, m_precomputedPath.end());
+    if (!PointPathGeometry(remaining, PointPathSpeed(*unit, _forcedMovement, speed, _reverseOrientation)))
+        return FailCheckedPath(unit, "remaining path cannot be launched safely");
+
+    Movement::MoveSplineInit init(unit);
+    init.MovebyPath(remaining, next - 1);
+    if (speed > 0.0f)
+        init.SetVelocity(speed);
+    if (_forcedMovement != FORCED_MOVEMENT_NONE)
+        init.SetWalk(_forcedMovement == FORCED_MOVEMENT_WALK);
+    if (_reverseOrientation)
+        init.SetOrientationInversed();
+    if (i_orientation > 0.0f)
+        init.SetFacing(i_orientation);
+
+    if (init.Launch() <= 0)
+        return FailCheckedPath(unit, "spline launch refused");
+
+    checked.SplineId = unit->movespline->GetId();
+    checked.InterruptCount = unit->movespline->GetInterruptCount();
+    checked.Launched = true;
+    i_recalculateSpeed = false;
+    _hasBeenStalled = false;
+    unit->AddUnitState(UNIT_STATE_ROAMING | UNIT_STATE_ROAMING_MOVE);
+    return true;
+}
+
 //----- Point Movement Generator
 template<class T>
 void PointMovementGenerator<T>::DoInitialize(T* unit)
 {
+    if (_checkedPath)
+    {
+        UpdateCheckedPath(unit, 0);
+        return;
+    }
+
     _stalled = false;
     _hasBeenStalled = false;
     _pauseTime.reset();
@@ -115,6 +385,9 @@ bool PointMovementGenerator<T>::DoUpdate(T* unit, uint32 diff)
 {
     if (!unit)
         return false;
+
+    if (_checkedPath)
+        return UpdateCheckedPath(unit, diff);
 
     if (unit->IsMovementPreventedByCasting())
     {
@@ -253,6 +526,30 @@ bool PointMovementGenerator<T>::DoUpdate(T* unit, uint32 diff)
 template<class T>
 void PointMovementGenerator<T>::DoFinalize(T* unit)
 {
+    if (_checkedPath)
+    {
+        if (OwnsCheckedSpline(unit))
+        {
+            if (!unit->movespline->Finalized())
+            {
+                if (PointPathContext(*unit, _checkedPath->MapId, _checkedPath->InstanceId) &&
+                    unit->GetPhaseMask() == _checkedPath->PhaseMask &&
+                    unit->movespline->GetInterruptCount() == _checkedPath->InterruptCount &&
+                    SamePointPathPosition(PointPathPosition(*unit), unit->movespline->ComputePosition()))
+                    unit->StopMoving();
+                else
+                {
+                    Movement::MoveSplineInit init(unit);
+                    init.Stop(true);
+                }
+            }
+            unit->ClearUnitState(UNIT_STATE_ROAMING | UNIT_STATE_ROAMING_MOVE);
+            if (_checkedPath->Arrived && !_checkedPath->Failed)
+                MovementInform(unit);
+        }
+        return;
+    }
+
     unit->ClearUnitState(UNIT_STATE_ROAMING | UNIT_STATE_ROAMING_MOVE);
     if (id == EVENT_CHARGE || id == EVENT_CHARGE_PREPATH)
     {
@@ -299,6 +596,12 @@ void PointMovementGenerator<T>::Resume(uint32 overrideTimer)
 template<class T>
 void PointMovementGenerator<T>::DoReset(T* unit)
 {
+    if (_checkedPath)
+    {
+        i_recalculateSpeed = true;
+        return;
+    }
+
     if (!unit->IsStopped())
         unit->StopMoving();
 
@@ -333,6 +636,10 @@ template <> void PointMovementGenerator<Creature>::MovementInform(Creature* unit
     }
 }
 
+template PointMovementGenerator<Player>::PointMovementGenerator(uint32, Movement::PointsArray const&,
+    Unit const&, ForcedMovement, float, float, bool);
+template PointMovementGenerator<Creature>::PointMovementGenerator(uint32, Movement::PointsArray const&,
+    Unit const&, ForcedMovement, float, float, bool);
 template void PointMovementGenerator<Player>::DoInitialize(Player*);
 template void PointMovementGenerator<Creature>::DoInitialize(Creature*);
 template void PointMovementGenerator<Player>::DoFinalize(Player*);
