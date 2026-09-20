@@ -14,6 +14,8 @@
  */
 
 #include "CreatureAI.h"
+#include "DetourNavMeshBuilder.h"
+#include "MapCollisionData.h"
 #include "MovementGenerator.h"
 #include "Player.h"
 #include "PointMovementGenerator.h"
@@ -1234,5 +1236,213 @@ namespace
         Motion()->UpdateMotion(1);
         ASSERT_EQ(_ai->Arrivals.size(), 1u);
         EXPECT_EQ(_ai->Arrivals.front().second, 7u);
+    }
+
+    class PathGeneratorCorridorTest : public PointMovementPathTest
+    {
+    protected:
+        void SetUp() override
+        {
+            PointMovementPathTest::SetUp();
+            _terrainFile = std::filesystem::temp_directory_path() /
+                ("ac-corridor-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".map");
+            map_fileheader header{};
+            header.mapMagic = MapMagic.asUInt;
+            header.versionMagic = MapVersionMagic;
+            header.heightMapOffset = sizeof(header);
+            header.heightMapSize = sizeof(map_heightHeader);
+            map_heightHeader height{MapHeightMagic.asUInt, MAP_HEIGHT_NO_HEIGHT, 10.0f, 10.0f};
+            {
+                std::ofstream file(_terrainFile, std::ios::binary);
+                file.write(reinterpret_cast<char const*>(&header), sizeof(header));
+                file.write(reinterpret_cast<char const*>(&height), sizeof(height));
+                ASSERT_TRUE(file.good());
+            }
+            auto terrain = std::make_shared<GridTerrainData>();
+            ASSERT_EQ(terrain->Load(_terrainFile.string()), TerrainMapDataReadResult::Success);
+            _map->SetTestTerrain(std::move(terrain));
+        }
+
+        void TearDown() override
+        {
+            PointMovementPathTest::TearDown();
+            std::filesystem::remove(_terrainFile);
+        }
+
+        void BuildIslands(bool connectedPrefix = false)
+        {
+            // Detour YZX coordinates: ground X=[0,64] and X=[80,128], separated by an unwalkable gap.
+            std::vector<unsigned short> vertices{
+                0, 10, 0, 0, 10, 64, 64, 10, 64, 64, 10, 0,
+                0, 10, 80, 0, 10, 128, 64, 10, 128, 64, 10, 80
+            };
+            std::vector<unsigned short> polygons{
+                0, 1, 2, 3, 0xffff, 0xffff, 0xffff, 0xffff,
+                4, 5, 6, 7, 0xffff, 0xffff, 0xffff, 0xffff
+            };
+            if (connectedPrefix)
+            {
+                vertices = {
+                    0, 10, 0, 0, 10, 32, 64, 10, 32, 64, 10, 0, 0, 10, 64, 64, 10, 64,
+                    0, 10, 80, 0, 10, 128, 64, 10, 128, 64, 10, 80
+                };
+                polygons = {
+                    0, 1, 2, 3, 0xffff, 1, 0xffff, 0xffff,
+                    1, 4, 5, 2, 0xffff, 0xffff, 0xffff, 0,
+                    6, 7, 8, 9, 0xffff, 0xffff, 0xffff, 0xffff
+                };
+            }
+            std::vector<unsigned short> flags(polygons.size() / 8, NAV_GROUND);
+            std::vector<unsigned char> areas(flags.size(), 0);
+            dtNavMeshCreateParams params{};
+            params.verts = vertices.data();
+            params.vertCount = vertices.size() / 3;
+            params.polys = polygons.data();
+            params.polyCount = flags.size();
+            params.polyFlags = flags.data();
+            params.polyAreas = areas.data();
+            params.nvp = 4;
+            params.bmax[0] = 64.0f;
+            params.bmax[1] = 20.0f;
+            params.bmax[2] = 128.0f;
+            params.walkableHeight = 2.0f;
+            params.walkableRadius = 0.5f;
+            params.walkableClimb = 1.0f;
+            params.cs = params.ch = 1.0f;
+            params.buildBvTree = true;
+            unsigned char* data = nullptr;
+            int size = 0;
+            ASSERT_TRUE(dtCreateNavMeshData(&params, &data, &size));
+            std::unique_ptr<unsigned char, decltype(&dtFree)> tile(data, dtFree);
+            std::shared_ptr<dtNavMesh> mesh(dtAllocNavMesh(), MMAP::NavMeshDeleter{});
+            ASSERT_NE(mesh, nullptr);
+            dtNavMeshParams meshParams{};
+            meshParams.tileWidth = meshParams.tileHeight = 128.0f;
+            meshParams.maxTiles = 1;
+            meshParams.maxPolys = 4;
+            ASSERT_TRUE(dtStatusSucceed(mesh->init(&meshParams)));
+            ASSERT_TRUE(dtStatusSucceed(mesh->addTile(data, size, DT_TILE_FREE_DATA, 0, nullptr)));
+            tile.release();
+
+            struct TestMMapData : MMapData
+            {
+                explicit TestMMapData(std::shared_ptr<dtNavMesh> mesh) { _navMesh = std::move(mesh); }
+            };
+            _map->GetMapCollisionData().GetMMapData() = TestMMapData(std::move(mesh));
+        }
+
+        void ExpectPartialPrefix(PathGenerator const& path, int expectedPolygons)
+        {
+            EXPECT_EQ(path.GetPathType(), PATHFIND_INCOMPLETE);
+            ASSERT_GT(path.GetPath().size(), 2u);
+            EXPECT_EQ(path.GetPath().front(), G3D::Vector3(10, 10, 10));
+            EXPECT_EQ(path.GetPath().back(), G3D::Vector3(64, 10, 10));
+            EXPECT_EQ(path.GetActualEndPosition(), path.GetPath().back());
+            EXPECT_EQ(path.GetEndPosition(), G3D::Vector3(90, 10, 10));
+            for (auto const& point : path.GetPath())
+            {
+                EXPECT_GE(point.x, 10.0f);
+                EXPECT_LE(point.x, 64.0f);
+                EXPECT_FLOAT_EQ(point.y, 10.0f);
+                EXPECT_FLOAT_EQ(point.z, 10.0f);
+            }
+
+            auto& mmap = _map->GetMapCollisionData().GetMMapData();
+            dtPolyRef base = mmap.GetNavMesh()->getPolyRefBase(mmap.GetNavMesh()->getTileAt(0, 0, 0));
+            float start[3]{10, 10, 10};
+            float end[3]{10, 10, 90};
+            dtPolyRef refs[4]{};
+            int count = 0;
+            dtQueryFilter filter;
+            ASSERT_TRUE(dtStatusSucceed(mmap.GetNavMeshQuery()->findPath(base, base + expectedPolygons,
+                start, end, &filter, refs, &count, 4)));
+            ASSERT_EQ(count, expectedPolygons);
+            EXPECT_EQ(refs[count - 1], base + expectedPolygons - 1);
+        }
+
+        std::filesystem::path _terrainFile;
+    };
+
+    TEST_F(PathGeneratorCorridorTest, DisconnectedOnePolygonSmoothPathEndsAtReachableBoundary)
+    {
+        BuildIslands();
+        PathGenerator path(_unit.get());
+        ASSERT_TRUE(path.CalculatePath(90, 10, 10, false));
+        ExpectPartialPrefix(path, 1);
+        ASSERT_TRUE(Dispatch(path.GetPath()));
+        EXPECT_EQ(SplinePath(), path.GetPath());
+        EXPECT_EQ(_unit->movespline->FinalDestination(), G3D::Vector3(64, 10, 10));
+    }
+
+    TEST_F(PathGeneratorCorridorTest, StartAtPartialBoundaryDoesNotAppendUnreachableGoal)
+    {
+        BuildIslands();
+        ResetPathSource({64, 10, 10});
+        for (bool straight : {false, true})
+        {
+            for (bool onePointLimit : {false, true})
+            {
+                PathGenerator path(_unit.get());
+                path.SetUseStraightPath(straight);
+                if (onePointLimit)
+                    path.SetPathLengthLimit(SMOOTH_PATH_STEP_SIZE);
+                ASSERT_TRUE(path.CalculatePath(90, 10, 10, false));
+                EXPECT_EQ(path.GetPathType(), PATHFIND_INCOMPLETE);
+                ASSERT_EQ(path.GetPath(), (Movement::PointsArray{{64, 10, 10}}));
+                EXPECT_EQ(path.GetActualEndPosition(), path.GetPath().back());
+                EXPECT_EQ(path.GetEndPosition(), G3D::Vector3(90, 10, 10));
+                EXPECT_FALSE(Dispatch(path.GetPath()));
+            }
+        }
+    }
+
+    TEST_F(PathGeneratorCorridorTest, ConnectedMultiPolygonPartialPrefixKeepsExistingClamp)
+    {
+        BuildIslands(true);
+        PathGenerator path(_unit.get());
+        ASSERT_TRUE(path.CalculatePath(90, 10, 10, false));
+        ExpectPartialPrefix(path, 2);
+    }
+
+    TEST_F(PathGeneratorCorridorTest, CompleteShortOnePolygonPathKeepsItsExactDestination)
+    {
+        BuildIslands();
+        for (bool straight : {false, true})
+        {
+            PathGenerator path(_unit.get());
+            path.SetUseStraightPath(straight);
+            ASSERT_TRUE(path.CalculatePath(10.1f, 10, 10, false));
+            EXPECT_EQ(path.GetPathType(), PATHFIND_NORMAL);
+            EXPECT_EQ(path.GetPath(), (Movement::PointsArray{{10, 10, 10}, {10.1f, 10, 10}}));
+            EXPECT_EQ(path.GetActualEndPosition(), path.GetPath().back());
+        }
+    }
+
+    TEST_F(PathGeneratorCorridorTest, ExplicitForcedDestinationRetainsItsNotUsingPathFlag)
+    {
+        BuildIslands();
+        for (float sourceX : {10.0f, 64.0f})
+        {
+            ResetPathSource({sourceX, 10, 10});
+            PathGenerator path(_unit.get());
+            ASSERT_TRUE(path.CalculatePath(90, 10, 10, true));
+            EXPECT_EQ(path.GetPathType(), PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH);
+            ASSERT_GE(path.GetPath().size(), 2u);
+            EXPECT_EQ(path.GetPath().back(), G3D::Vector3(90, 10, 10));
+            EXPECT_EQ(path.GetActualEndPosition(), path.GetPath().back());
+        }
+    }
+
+    TEST_F(PathGeneratorCorridorTest, InvalidPublicQueryDoesNotReplacePreviousCompletePath)
+    {
+        BuildIslands();
+        PathGenerator path(_unit.get());
+        ASSERT_TRUE(path.CalculatePath(20, 10, 10, false));
+        auto expected = path.GetPath();
+        ASSERT_EQ(path.GetPathType(), PATHFIND_NORMAL);
+        EXPECT_FALSE(path.CalculatePath(std::numeric_limits<float>::quiet_NaN(), 10, 10, false));
+        EXPECT_EQ(path.GetPath(), expected);
+        EXPECT_EQ(path.GetPathType(), PATHFIND_NORMAL);
+        EXPECT_EQ(path.GetActualEndPosition(), expected.back());
     }
 }
