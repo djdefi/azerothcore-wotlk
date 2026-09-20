@@ -280,18 +280,26 @@ bool PointMovementGenerator<T>::UpdateCheckedPath(T* unit, uint32 diff)
         return true;
 
     // Only the recorded segment can consume its exact endpoint; proximity to another vertex is not progress.
+    bool finishFacing = false;
     if (checked.Launched && source == m_precomputedPath[next] && progressSource == m_precomputedPath[next])
     {
-        if (++next == m_precomputedPath.size())
+        if (next + 1 == m_precomputedPath.size())
         {
-            checked.Arrived = true;
-            return false;
+            if (i_orientation <= 0.0f)
+            {
+                checked.Arrived = true;
+                return false;
+            }
+            finishFacing = true;
         }
+        else
+            ++next;
     }
 
     Movement::PointsArray remaining{source};
     remaining.insert(remaining.end(), m_precomputedPath.begin() + next, m_precomputedPath.end());
-    if (!PointPathGeometry(remaining, PointPathSpeed(*unit, _forcedMovement, speed, _reverseOrientation),
+    if (!finishFacing && !PointPathGeometry(remaining,
+        PointPathSpeed(*unit, _forcedMovement, speed, _reverseOrientation),
         checked.Launched))
         return FailCheckedPath(unit, "remaining path cannot be launched safely");
 

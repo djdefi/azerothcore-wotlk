@@ -1080,10 +1080,17 @@ namespace
                 Restart(kind);
                 if (final)
                 {
+                    EXPECT_EQ(Motion()->GetCurrentMovementGeneratorType(), POINT_MOTION_TYPE);
+                    EXPECT_EQ(SplinePath(), (Movement::PointsArray{path.back(), path.back()}));
+                    EXPECT_FALSE(_unit->HasUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING));
+                    EXPECT_TRUE(_ai->Arrivals.empty());
+                    Advance(_unit->movespline->Duration());
+                    Motion()->UpdateMotion(1);
                     EXPECT_EQ(Motion()->GetCurrentMovementGeneratorType(), IDLE_MOTION_TYPE);
                     ASSERT_EQ(_ai->Arrivals.size(), 1u);
                     EXPECT_EQ(_ai->Arrivals.front().second, 42u);
                     EXPECT_TRUE(_unit->movespline->Finalized());
+                    EXPECT_FLOAT_EQ(_unit->GetOrientation(), 1.0f);
                 }
                 else
                 {
@@ -1093,6 +1100,116 @@ namespace
                     EXPECT_TRUE(_ai->Arrivals.empty());
                 }
             }
+        }
+    }
+
+    TEST_F(PointMovementPathTest, ExactFinalVertexWithoutRequestedFacingDoesNotLaunchAgain)
+    {
+        Movement::PointsArray path{{10000, 10, 10}, {10010, 10, 10}};
+        ResetPathSource(path.front());
+        ASSERT_TRUE(Motion()->MovePointPath(42, path, 0, 0, FORCED_MOVEMENT_RUN, 0.1f));
+        Advance(_unit->movespline->Duration() - 1);
+        ASSERT_EQ(_unit->movespline->ComputePosition(), path.back());
+        _unit->PauseMovement(0, MOTION_SLOT_ACTIVE);
+        uint32 stoppedId = _unit->movespline->GetId();
+        float orientation = _unit->GetOrientation();
+        _unit->ResumeMovement(0, MOTION_SLOT_ACTIVE);
+        Motion()->UpdateMotion(1);
+        EXPECT_EQ(Motion()->GetCurrentMovementGeneratorType(), IDLE_MOTION_TYPE);
+        EXPECT_EQ(_unit->movespline->GetId(), stoppedId);
+        EXPECT_FLOAT_EQ(_unit->GetOrientation(), orientation);
+        EXPECT_EQ(_ai->Arrivals.size(), 1u);
+        Motion()->UpdateMotion(1);
+        EXPECT_EQ(_ai->Arrivals.size(), 1u);
+        EXPECT_EQ(_unit->movespline->GetId(), stoppedId);
+    }
+
+    TEST_F(PointMovementPathTest, ExactFinalFacingDefersAcrossCastRootAndStunAndCompletesOnce)
+    {
+        Movement::PointsArray path{{10000, 10, 10}, {10010, 10, 10}};
+        for (unsigned block = 0; block < 3; ++block)
+        {
+            SCOPED_TRACE(block);
+            ResetPathSource(path.front());
+            ASSERT_TRUE(Dispatch(path, false, 0.1f));
+            Advance(_unit->movespline->Duration() - 1);
+            Restart(PointPathRestart::Pause);
+            ASSERT_EQ(SplinePath(), (Movement::PointsArray{path.back(), path.back()}));
+            if (block == 0)
+                _unit->Casting = true;
+            else
+                _unit->SetControlled(true, block == 1 ? UNIT_STATE_ROOT : UNIT_STATE_STUNNED);
+            Motion()->UpdateMotion(1);
+            uint32 stoppedId = _unit->movespline->GetId();
+            ASSERT_TRUE(_unit->movespline->Finalized());
+            Motion()->UpdateMotion(100);
+            EXPECT_EQ(_unit->movespline->GetId(), stoppedId);
+            EXPECT_TRUE(_ai->Arrivals.empty());
+            EXPECT_FLOAT_EQ(_unit->GetPositionX(), path.back().x);
+            EXPECT_FLOAT_EQ(_unit->GetPositionY(), path.back().y);
+            if (block == 0)
+                _unit->Casting = false;
+            else
+                _unit->SetControlled(false, block == 1 ? UNIT_STATE_ROOT : UNIT_STATE_STUNNED);
+            Motion()->UpdateMotion(1);
+            ASSERT_EQ(SplinePath(), (Movement::PointsArray{path.back(), path.back()}));
+            EXPECT_TRUE(_ai->Arrivals.empty());
+            EXPECT_FALSE(_unit->HasUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING));
+            Advance(_unit->movespline->Duration());
+            Motion()->UpdateMotion(1);
+            EXPECT_FLOAT_EQ(_unit->GetOrientation(), 1.0f);
+            ASSERT_EQ(_ai->Arrivals.size(), 1u);
+            uint32 completedId = _unit->movespline->GetId();
+            Motion()->UpdateMotion(1);
+            EXPECT_EQ(_unit->movespline->GetId(), completedId);
+            EXPECT_EQ(_ai->Arrivals.size(), 1u);
+        }
+    }
+
+    TEST_F(PointMovementPathTest, ExactFinalFacingCancellationAndReplacementPreserveOwnership)
+    {
+        Movement::PointsArray path{{10000, 10, 10}, {10010, 10, 10}};
+        Movement::PointsArray replacement{path.back(), {10015, 15, 10}};
+        for (unsigned action = 0; action < 3; ++action)
+        {
+            SCOPED_TRACE(action);
+            ResetPathSource(path.front());
+            ASSERT_TRUE(Dispatch(path, false, 0.1f));
+            Advance(_unit->movespline->Duration() - 1);
+            Restart(PointPathRestart::Pause);
+            ASSERT_EQ(SplinePath(), (Movement::PointsArray{path.back(), path.back()}));
+            if (action == 0)
+            {
+                Motion()->MovementExpired();
+                EXPECT_TRUE(_unit->movespline->Finalized());
+                EXPECT_EQ(Motion()->GetCurrentMovementGeneratorType(), IDLE_MOTION_TYPE);
+            }
+            else if (action == 1)
+            {
+                ASSERT_TRUE(Motion()->MovePointPath(43, replacement, 0, 0));
+                EXPECT_EQ(SplinePath(), replacement);
+                EXPECT_TRUE(_ai->Arrivals.empty());
+                Advance(_unit->movespline->Duration());
+                Motion()->UpdateMotion(1);
+                ASSERT_EQ(_ai->Arrivals.size(), 1u);
+                EXPECT_EQ(_ai->Arrivals.front().second, 43u);
+                continue;
+            }
+            else
+            {
+                Movement::MoveSplineInit foreign(_unit.get());
+                foreign.MovebyPath(replacement);
+                ASSERT_GT(foreign.Launch(), 0);
+                uint32 foreignId = _unit->movespline->GetId();
+                Motion()->MovementExpiredOnSlot(MOTION_SLOT_ACTIVE, false);
+                EXPECT_EQ(_unit->movespline->GetId(), foreignId);
+                EXPECT_FALSE(_unit->movespline->Finalized());
+                EXPECT_EQ(SplinePath(), replacement);
+                EXPECT_TRUE(_unit->HasUnitState(UNIT_STATE_ROAMING_MOVE));
+            }
+            EXPECT_TRUE(_ai->Arrivals.empty());
+            EXPECT_FLOAT_EQ(_unit->GetPositionX(), path.back().x);
+            EXPECT_FLOAT_EQ(_unit->GetPositionY(), path.back().y);
         }
     }
 
