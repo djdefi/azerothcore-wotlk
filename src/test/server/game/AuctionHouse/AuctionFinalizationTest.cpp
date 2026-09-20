@@ -103,6 +103,19 @@ TEST_F(AuctionFinalizationTest, DisabledHookIsNotCalled)
     EXPECT_EQ(trans->GetSize(), 0u);
 }
 
+TEST_F(AuctionFinalizationTest, RepeatedCallsAreNotDeduplicatedByAuctionId)
+{
+    auto* script = new testing::StrictMock<FinalizationScript>();
+    AuctionEntry auction{};
+    auction.Id = 1;
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+
+    EXPECT_CALL(*script, OnBeforeAuctionFinalization(&auction, AuctionFinalizationReason::Sold, trans)).Times(2);
+
+    sScriptMgr->OnBeforeAuctionFinalization(&auction, AuctionFinalizationReason::Sold, trans);
+    sScriptMgr->OnBeforeAuctionFinalization(&auction, AuctionFinalizationReason::Sold, trans);
+}
+
 TEST_P(AuctionFinalizationTest, DispatchesOnceWithCallerTransactionAndUnchangedReason)
 {
     auto* script = new testing::StrictMock<FinalizationScript>();
