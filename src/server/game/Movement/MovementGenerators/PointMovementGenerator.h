@@ -73,6 +73,8 @@ private:
         uint32 PhaseMask;
         uint32 SplineId;
         uint64 InterruptCount;
+        bool Ghost;
+        bool WaterWalking;
         bool Launched = false;
         bool Arrived = false;
         bool Failed = false;

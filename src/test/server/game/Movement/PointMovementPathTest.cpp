@@ -15,10 +15,14 @@
 
 #include "CreatureAI.h"
 #include "MovementGenerator.h"
+#include "Player.h"
 #include "PointMovementGenerator.h"
+#include "ScriptDefines/PlayerScript.h"
+#include "ScriptMgr.h"
 #include "TestCreature.h"
 #include "TestMap.h"
 #include "WorldMock.h"
+#include "WorldSession.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include <chrono>
@@ -51,6 +55,13 @@ namespace
             EnsureGridCreated(GridCoord(cell.GridX(), cell.GridY()));
             AddToGrid<Creature>(creature, cell);
         }
+
+        void RegisterPlayer(Player* player)
+        {
+            Cell cell(player->GetPositionX(), player->GetPositionY());
+            EnsureGridCreated(GridCoord(cell.GridX(), cell.GridY()));
+            AddToGrid<Player>(player, cell);
+        }
     };
 
     class PointPathCreature : public TestCreature
@@ -71,6 +82,57 @@ namespace
         void UpdateAI(uint32) override { }
         void MovementInform(uint32 type, uint32 id) override { Arrivals.emplace_back(type, id); }
         std::vector<std::pair<uint32, uint32>> Arrivals;
+    };
+
+    class PointPathPlayer : public Player
+    {
+    public:
+        using Player::Player;
+
+        void UpdateObjectVisibility(bool = true, bool = false) override { }
+        bool IsMovementPreventedByCasting() const override { return Casting; }
+        float GetCollisionHeight() const override { return 2.0f; }
+        float GetCollisionWidth() const override { return 1.0f; }
+
+        void InitializeForMovement(Map* map)
+        {
+            Object::_Create(101, 0, HighGuid::Player);
+            SetMap(map);
+            SetPhaseMask(1, false);
+            Relocate(10, 10, 10);
+            SetUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED);
+            SetMaxHealth(100);
+            Object::AddToWorld();
+        }
+
+        void SetLifeState(DeathState state, bool ghost)
+        {
+            m_deathState = state;
+            if (ghost)
+                SetPlayerFlag(PLAYER_FLAGS_GHOST);
+            else
+                RemovePlayerFlag(PLAYER_FLAGS_GHOST);
+        }
+
+        void ReleaseGhost()
+        {
+            SetLifeState(DeathState::Corpse, true);
+            SetHealth(1);
+            SetWaterWalking(true);
+            // BuildPlayerRepop requests waterwalking; the client ACK carries this movement flag.
+            AddUnitMovementFlag(MOVEMENTFLAG_WATERWALKING);
+        }
+
+        void LeaveWorld() { Object::RemoveFromWorld(); }
+        bool Casting = false;
+    };
+
+    enum class PointPathRestart
+    {
+        Pause,
+        Cast,
+        Root,
+        Speed
     };
 
     class PointMovementPathTest : public Test
@@ -102,6 +164,13 @@ namespace
 
         void TearDown() override
         {
+            if (_player)
+            {
+                _player->GetSession()->SetPlayer(nullptr);
+                _player->LeaveWorld();
+                _player->RemoveFromGrid();
+                _player.reset();
+            }
             _unit->CleanupCombatState();
             _unit->RemoveFromGrid();
             _unit.reset();
@@ -124,18 +193,28 @@ namespace
 
         void Advance(uint32 milliseconds)
         {
-            auto& spline = *_unit->movespline;
+            Advance(_unit.get(), milliseconds);
+        }
+
+        void Advance(Unit* unit, uint32 milliseconds)
+        {
+            auto& spline = *unit->movespline;
             spline.updateState(milliseconds);
             auto position = spline.ComputePosition();
-            _unit->Relocate(position.x, position.y, position.z, position.orientation);
+            unit->Relocate(position.x, position.y, position.z, position.orientation);
             // The production Unit update disables the spline after its final position is reached.
             if (spline.Finalized())
-                _unit->DisableSpline();
+                unit->DisableSpline();
         }
 
         Movement::PointsArray SplinePath() const
         {
-            auto const& spline = _unit->movespline->_Spline();
+            return SplinePath(_unit.get());
+        }
+
+        Movement::PointsArray SplinePath(Unit const* unit) const
+        {
+            auto const& spline = unit->movespline->_Spline();
             Movement::PointsArray result;
             for (int32 i = spline.first(); i <= spline.last(); ++i)
                 result.push_back(spline.getPoint(i));
@@ -149,9 +228,73 @@ namespace
             EXPECT_TRUE(_ai->Arrivals.empty());
         }
 
+        void CreatePlayer()
+        {
+            ScriptRegistry<PlayerScript>::InitEnabledHooksIfNeeded(PLAYERHOOK_END);
+            // Like the existing Player fixture, keep a socketless session alive: its destructor writes to the DB.
+            static WorldSession* session = []
+            {
+                auto* value = new WorldSession(1, "movement-test", 0, nullptr, SEC_PLAYER,
+                    EXPANSION_WRATH_OF_THE_LICH_KING, 0, LOCALE_enUS, 0, false, false, 0);
+                value->InitRBACDataForTest();
+                return value;
+            }();
+            _player = std::make_unique<PointPathPlayer>(session);
+            _player->InitializeForMovement(_map.get());
+            session->SetPlayer(_player.get());
+            _map->RegisterPlayer(_player.get());
+            _player->GetMotionMaster()->MoveIdle();
+        }
+
+        bool DispatchPlayer(Movement::PointsArray const& path)
+        {
+            return _player->GetMotionMaster()->MovePointPath(42, path, _player->GetMapId(),
+                _player->GetInstanceId(), FORCED_MOVEMENT_RUN);
+        }
+
+        void Restart(PointPathRestart kind)
+        {
+            switch (kind)
+            {
+                case PointPathRestart::Pause:
+                    _unit->PauseMovement(0, MOTION_SLOT_ACTIVE);
+                    Motion()->UpdateMotion(1);
+                    _unit->ResumeMovement(0, MOTION_SLOT_ACTIVE);
+                    break;
+                case PointPathRestart::Cast:
+                    _unit->Casting = true;
+                    Motion()->UpdateMotion(1);
+                    _unit->Casting = false;
+                    break;
+                case PointPathRestart::Root:
+                    _unit->SetControlled(true, UNIT_STATE_ROOT);
+                    Motion()->UpdateMotion(1);
+                    _unit->SetControlled(false, UNIT_STATE_ROOT);
+                    break;
+                case PointPathRestart::Speed:
+                    _unit->SetSpeedRate(MOVE_RUN, 1.5f);
+                    Motion()->propagateSpeedChange();
+                    break;
+            }
+            EXPECT_TRUE(_ai->Arrivals.empty());
+            Motion()->UpdateMotion(1);
+        }
+
+        void ResetPathSource(G3D::Vector3 const& source)
+        {
+            if (Motion()->GetMotionSlot(MOTION_SLOT_ACTIVE))
+                Motion()->MovementExpired();
+            _ai->Arrivals.clear();
+            _unit->SetSpeedRate(MOVE_RUN, 1.0f);
+            _unit->RemoveFromGrid();
+            _unit->Relocate(source.x, source.y, source.z);
+            _map->RegisterCreature(_unit.get());
+        }
+
         std::unique_ptr<IWorld> _previousWorld;
         std::unique_ptr<PointPathMap> _map;
         std::unique_ptr<PointPathCreature> _unit;
+        std::unique_ptr<PointPathPlayer> _player;
         PointPathAI* _ai = nullptr;
     };
 
@@ -691,6 +834,277 @@ namespace
         checked.insert(checked.begin(), {10, 10, 10.5f});
         ASSERT_TRUE(Dispatch(checked));
         EXPECT_EQ(SplinePath(), checked);
+    }
+
+    TEST_F(PointMovementPathTest, ReleasedPlayerGhostUsesGroundCorpseAndHealerApproachPaths)
+    {
+        CreatePlayer();
+        _player->ReleaseGhost();
+        ASSERT_TRUE(_player->IsPlayer());
+        ASSERT_TRUE(_player->isDead());
+        ASSERT_TRUE(_player->HasPlayerFlag(PLAYER_FLAGS_GHOST));
+        ASSERT_TRUE(_player->HasUnitMovementFlag(MOVEMENTFLAG_WATERWALKING));
+        ASSERT_FALSE(_player->HasUnitState(UNIT_STATE_DIED));
+        for (auto const& path : {Path(), Movement::PointsArray{{10, 10, 10}, {15, 15, 10}}})
+        {
+            _player->Relocate(10, 10, 10);
+            ASSERT_TRUE(DispatchPlayer(path));
+            EXPECT_EQ(_player->GetMotionMaster()->GetCurrentMovementGeneratorType(), POINT_MOTION_TYPE);
+            EXPECT_EQ(_player->GetMotionMaster()->GetCurrentSplineId(), _player->movespline->GetId());
+            EXPECT_FALSE(_player->movespline->Finalized());
+            EXPECT_EQ(SplinePath(_player.get()), path);
+            Advance(_player.get(), _player->movespline->Duration());
+            _player->GetMotionMaster()->UpdateMotion(1);
+            EXPECT_EQ(_player->GetMotionMaster()->GetMotionSlotType(MOTION_SLOT_ACTIVE), NULL_MOTION_TYPE);
+        }
+    }
+
+    TEST_F(PointMovementPathTest, ReleasedPlayerGhostPreservesRootsCastingAndOrderedResume)
+    {
+        CreatePlayer();
+        _player->ReleaseGhost();
+        _player->SetControlled(true, UNIT_STATE_ROOT);
+        ASSERT_TRUE(DispatchPlayer(Path()));
+        EXPECT_EQ(_player->GetMotionMaster()->GetCurrentSplineId(), 0u);
+        _player->GetMotionMaster()->UpdateMotion(1);
+        EXPECT_EQ(_player->GetMotionMaster()->GetCurrentSplineId(), 0u);
+        _player->SetControlled(false, UNIT_STATE_ROOT);
+        _player->GetMotionMaster()->UpdateMotion(1);
+        EXPECT_EQ(SplinePath(_player.get()), Path());
+        Advance(_player.get(), 500);
+        auto expected = Path();
+        expected.front() = _player->movespline->ComputePosition();
+        _player->Casting = true;
+        _player->GetMotionMaster()->UpdateMotion(1);
+        ASSERT_TRUE(_player->movespline->GetLastStop());
+        EXPECT_TRUE(_player->movespline->Finalized());
+        _player->Casting = false;
+        _player->GetMotionMaster()->UpdateMotion(1);
+        EXPECT_EQ(SplinePath(_player.get()), expected);
+        EXPECT_TRUE(_player->HasUnitMovementFlag(MOVEMENTFLAG_WATERWALKING));
+    }
+
+    TEST_F(PointMovementPathTest, PlayerDeadUnreleasedAndFeignDeathStatesAreNotGhostPermission)
+    {
+        CreatePlayer();
+        auto* owner = _player->GetMotionMaster()->top();
+        for (DeathState state : {DeathState::Corpse, DeathState::Dead, DeathState::JustDied})
+        {
+            _player->SetLifeState(state, false);
+            EXPECT_FALSE(DispatchPlayer(Path()));
+        }
+        _player->SetLifeState(DeathState::JustDied, true);
+        EXPECT_FALSE(DispatchPlayer(Path()));
+        _player->SetLifeState(DeathState::Alive, true);
+        EXPECT_FALSE(DispatchPlayer(Path()));
+        for (bool ghost : {false, true})
+        {
+            _player->SetLifeState(ghost ? DeathState::Corpse : DeathState::Alive, ghost);
+            _player->AddUnitState(UNIT_STATE_DIED);
+            EXPECT_FALSE(DispatchPlayer(Path()));
+            _player->ClearUnitState(UNIT_STATE_DIED);
+        }
+        _player->SetLifeState(DeathState::Alive, false);
+        _player->AddUnitMovementFlag(MOVEMENTFLAG_WATERWALKING);
+        EXPECT_FALSE(DispatchPlayer(Path()));
+        EXPECT_EQ(_player->GetMotionMaster()->top(), owner);
+        EXPECT_EQ(_player->movespline->GetId(), 0u);
+    }
+
+    TEST_F(PointMovementPathTest, ReleasedPlayerGhostDoesNotBypassOtherFrameRestrictions)
+    {
+        CreatePlayer();
+        _player->ReleaseGhost();
+        for (auto flag : {MOVEMENTFLAG_SWIMMING, MOVEMENTFLAG_ONTRANSPORT, MOVEMENTFLAG_FLYING,
+            MOVEMENTFLAG_CAN_FLY, MOVEMENTFLAG_DISABLE_GRAVITY, MOVEMENTFLAG_FALLING, MOVEMENTFLAG_HOVER})
+        {
+            _player->AddUnitMovementFlag(flag);
+            EXPECT_FALSE(DispatchPlayer(Path()));
+            _player->RemoveUnitMovementFlag(flag);
+        }
+        _player->SetUnitFlag(UNIT_FLAG_DISABLE_MOVE);
+        EXPECT_FALSE(DispatchPlayer(Path()));
+        _player->RemoveUnitFlag(UNIT_FLAG_DISABLE_MOVE);
+        EXPECT_EQ(_player->GetMotionMaster()->GetCurrentMovementGeneratorType(), IDLE_MOTION_TYPE);
+    }
+
+    TEST_F(PointMovementPathTest, PlayerResurrectionAndWaterwalkingChangesInvalidateDeferredOrStoppedProof)
+    {
+        CreatePlayer();
+        for (bool stopped : {false, true})
+        {
+            for (bool resurrect : {false, true})
+            {
+                SCOPED_TRACE(testing::Message() << "stopped=" << stopped << " resurrect=" << resurrect);
+                _player->Relocate(10, 10, 10);
+                _player->ReleaseGhost();
+                _player->Casting = !stopped;
+                ASSERT_TRUE(DispatchPlayer(Path()));
+                if (stopped)
+                {
+                    Advance(_player.get(), 500);
+                    _player->PauseMovement(0, MOTION_SLOT_ACTIVE);
+                }
+                if (resurrect)
+                    _player->SetLifeState(DeathState::Alive, false);
+                _player->SetWaterWalking(false);
+                _player->RemoveUnitMovementFlag(MOVEMENTFLAG_WATERWALKING);
+                _player->Casting = false;
+                _player->ResumeMovement(0, MOTION_SLOT_ACTIVE);
+                _player->GetMotionMaster()->UpdateMotion(1);
+                EXPECT_EQ(_player->GetMotionMaster()->GetMotionSlotType(MOTION_SLOT_ACTIVE), NULL_MOTION_TYPE);
+                EXPECT_TRUE(_player->movespline->Finalized());
+            }
+        }
+    }
+
+    TEST_F(PointMovementPathTest, PlayerLifeTransitionsInvalidateRunningAndLivingDeferredProof)
+    {
+        CreatePlayer();
+        _player->ReleaseGhost();
+        ASSERT_TRUE(DispatchPlayer(Path()));
+        Advance(_player.get(), 500);
+        _player->SetLifeState(DeathState::Alive, false);
+        _player->RemoveUnitMovementFlag(MOVEMENTFLAG_WATERWALKING);
+        _player->GetMotionMaster()->UpdateMotion(1);
+        EXPECT_EQ(_player->GetMotionMaster()->GetMotionSlotType(MOTION_SLOT_ACTIVE), NULL_MOTION_TYPE);
+        EXPECT_TRUE(_player->movespline->Finalized());
+
+        _player->Relocate(10, 10, 10);
+        _player->Casting = true;
+        ASSERT_TRUE(DispatchPlayer(Path()));
+        _player->ReleaseGhost();
+        _player->Casting = false;
+        _player->GetMotionMaster()->UpdateMotion(1);
+        EXPECT_EQ(_player->GetMotionMaster()->GetMotionSlotType(MOTION_SLOT_ACTIVE), NULL_MOTION_TYPE);
+    }
+
+    TEST_F(PointMovementPathTest, InitialTinySegmentsRemainRejected)
+    {
+        EXPECT_FALSE(Dispatch({{10, 10, 10}, {10.005f, 10, 10}}));
+        EXPECT_FALSE(Dispatch({{10, 10, 10}, {10.005f, 10, 10}, {20, 10, 10}}));
+        EXPECT_FALSE(Dispatch({{10, 10, 10}, {20, 10, 10}, {20.005f, 10, 10}}));
+        EXPECT_EQ(Motion()->GetCurrentMovementGeneratorType(), IDLE_MOTION_TYPE);
+    }
+
+    TEST_F(PointMovementPathTest, TinyLeadingResidualBeforeCornerOrHairpinPreservesEveryRemainingVertex)
+    {
+        Movement::PointsArray hairpin{{10, 10, 10}, {20, 10, 10}, {20, 10.02f, 10}, {10, 10.02f, 10},
+            {10, 10, 10}, {30, 10, 10}};
+        for (auto const& path : {Path(), hairpin})
+        {
+            for (auto kind : {PointPathRestart::Pause, PointPathRestart::Cast,
+                PointPathRestart::Root, PointPathRestart::Speed})
+            {
+                SCOPED_TRACE(testing::Message() << "vertices=" << path.size() << " restart=" << int(kind));
+                ResetPathSource(path.front());
+                ASSERT_TRUE(Dispatch(path));
+                Advance(1428);
+                auto source = _unit->movespline->ComputePosition();
+                ASSERT_GT((source - path[1]).length(), 0.0f);
+                ASSERT_LT((source - path[1]).length(), 0.01f);
+                Restart(kind);
+                ASSERT_EQ(Motion()->GetCurrentMovementGeneratorType(), POINT_MOTION_TYPE);
+                EXPECT_FALSE(_unit->movespline->Finalized());
+                auto expected = path;
+                expected.front() = source;
+                EXPECT_EQ(SplinePath(), expected);
+                EXPECT_TRUE(_ai->Arrivals.empty());
+            }
+        }
+    }
+
+    TEST_F(PointMovementPathTest, TinyLeadingResidualBeforeFinalEndpointDoesNotAnnounceEarlyArrival)
+    {
+        Movement::PointsArray path{{10, 10, 10}, {20, 10, 10}};
+        for (auto kind : {PointPathRestart::Pause, PointPathRestart::Cast,
+            PointPathRestart::Root, PointPathRestart::Speed})
+        {
+            SCOPED_TRACE(int(kind));
+            ResetPathSource(path.front());
+            ASSERT_TRUE(Dispatch(path));
+            Advance(1428);
+            auto source = _unit->movespline->ComputePosition();
+            ASSERT_GT((source - path.back()).length(), 0.0f);
+            ASSERT_LT((source - path.back()).length(), 0.01f);
+            Restart(kind);
+            ASSERT_EQ(Motion()->GetCurrentMovementGeneratorType(), POINT_MOTION_TYPE);
+            EXPECT_EQ(SplinePath(), (Movement::PointsArray{source, path.back()}));
+            EXPECT_TRUE(_ai->Arrivals.empty());
+            Advance(_unit->movespline->Duration());
+            Motion()->UpdateMotion(1);
+            ASSERT_EQ(_ai->Arrivals.size(), 1u);
+            EXPECT_EQ(_ai->Arrivals.front().second, 42u);
+        }
+    }
+
+    TEST_F(PointMovementPathTest, ExactlyReachedInteriorVertexResumesByRecordedIndex)
+    {
+        for (auto kind : {PointPathRestart::Pause, PointPathRestart::Cast,
+            PointPathRestart::Root, PointPathRestart::Speed})
+        {
+            SCOPED_TRACE(int(kind));
+            ResetPathSource(Path().front());
+            ASSERT_TRUE(Dispatch(Path()));
+            Advance(1429);
+            ASSERT_EQ(_unit->movespline->currentPathIdx(), 1);
+            ASSERT_EQ(_unit->movespline->ComputePosition(), Path()[1]);
+            Restart(kind);
+            EXPECT_EQ(SplinePath(), (Movement::PointsArray{Path()[1], Path().back()}));
+            EXPECT_EQ(_unit->movespline->currentPathIdx(), 1);
+            EXPECT_TRUE(_ai->Arrivals.empty());
+        }
+    }
+
+    TEST_F(PointMovementPathTest, FloatRoundedExactResidualUsesOnlyItsRecordedCornerOrFinalEndpoint)
+    {
+        for (bool final : {false, true})
+        {
+            Movement::PointsArray path{{10000, 10, 10}, {10010, 10, 10}};
+            if (!final)
+            {
+                path.push_back({10010, 10.02f, 10});
+                path.push_back({10000, 10.02f, 10});
+            }
+            for (auto kind : {PointPathRestart::Pause, PointPathRestart::Cast,
+                PointPathRestart::Root, PointPathRestart::Speed})
+            {
+                SCOPED_TRACE(testing::Message() << "final=" << final << " restart=" << int(kind));
+                ResetPathSource(path.front());
+                ASSERT_TRUE(Dispatch(path, false, 0.1f));
+                auto const& spline = _unit->movespline->_Spline();
+                Advance(spline.length(spline.first() + 1) - 1);
+                ASSERT_EQ(_unit->movespline->currentPathIdx(), 0);
+                ASSERT_FALSE(_unit->movespline->Finalized());
+                ASSERT_EQ(_unit->movespline->ComputePosition(), path[1]);
+                Restart(kind);
+                if (final)
+                {
+                    EXPECT_EQ(Motion()->GetCurrentMovementGeneratorType(), IDLE_MOTION_TYPE);
+                    ASSERT_EQ(_ai->Arrivals.size(), 1u);
+                    EXPECT_EQ(_ai->Arrivals.front().second, 42u);
+                    EXPECT_TRUE(_unit->movespline->Finalized());
+                }
+                else
+                {
+                    EXPECT_EQ(Motion()->GetCurrentMovementGeneratorType(), POINT_MOTION_TYPE);
+                    EXPECT_EQ(SplinePath(), (Movement::PointsArray{path[1], path[2], path[3]}));
+                    EXPECT_EQ(_unit->movespline->currentPathIdx(), 1);
+                    EXPECT_TRUE(_ai->Arrivals.empty());
+                }
+            }
+        }
+    }
+
+    TEST_F(PointMovementPathTest, SmallDisplacementToAVertexDoesNotReplaceRecordedProgress)
+    {
+        ASSERT_TRUE(Dispatch(Path()));
+        Advance(1428);
+        _unit->PauseMovement(0, MOTION_SLOT_ACTIVE);
+        ASSERT_NE(_unit->movespline->GetLastStop()->Position, Path()[1]);
+        _unit->Relocate(20, 10, 10);
+        _unit->ResumeMovement(0, MOTION_SLOT_ACTIVE);
+        ExpectRetired();
     }
 
     TEST_F(PointMovementPathTest, LegacyPointRetainsItsExistingEndpointBehavior)

@@ -41,15 +41,26 @@ namespace
         return (left - right).squaredLength() <= PointPathToleranceSq;
     }
 
+    bool PointPathGhost(Unit const& unit)
+    {
+        return unit.IsPlayer() && unit.ToPlayer()->HasPlayerFlag(PLAYER_FLAGS_GHOST);
+    }
+
     bool PointPathContext(Unit const& unit, uint32 mapId, uint32 instanceId)
     {
-        return unit.IsInWorld() && unit.IsAlive() && unit.FindMap() &&
+        if (!unit.IsInWorld() || !unit.FindMap())
+            return false;
+
+        bool ghost = PointPathGhost(unit);
+        return (ghost ? unit.isDead() : unit.IsAlive()) &&
             unit.GetMapId() == mapId && unit.GetInstanceId() == instanceId &&
-            !unit.HasUnitFlag(UNIT_FLAG_DISABLE_MOVE) && !unit.HasUnitState(UNIT_STATE_IN_FLIGHT) &&
+            !unit.HasUnitFlag(UNIT_FLAG_DISABLE_MOVE) &&
+            !unit.HasUnitState(UNIT_STATE_IN_FLIGHT | UNIT_STATE_DIED) &&
             !unit.GetTransport() && !unit.GetVehicle() && !unit.GetTransGUID() && !unit.movespline->onTransport &&
             !unit.HasUnitMovementFlag(MovementFlags(MOVEMENTFLAG_ONTRANSPORT | MOVEMENTFLAG_SWIMMING |
                 MOVEMENTFLAG_FLYING | MOVEMENTFLAG_CAN_FLY | MOVEMENTFLAG_DISABLE_GRAVITY |
-                MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR | MOVEMENTFLAG_HOVER | MOVEMENTFLAG_WATERWALKING)) &&
+                MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR | MOVEMENTFLAG_HOVER)) &&
+            (ghost || !unit.HasUnitMovementFlag(MOVEMENTFLAG_WATERWALKING)) &&
             (!unit.IsPlayer() || !unit.ToPlayer()->IsBeingTeleported());
     }
 
@@ -74,7 +85,7 @@ namespace
         return std::min(velocity, std::max(28.0f, runSpeed * 4.0f));
     }
 
-    bool PointPathGeometry(Movement::PointsArray const& path, float velocity)
+    bool PointPathGeometry(Movement::PointsArray const& path, float velocity, bool progress = false)
     {
         if (path.size() < 2 || path.size() > MAX_POINT_PATH_LENGTH || velocity <= 0.01f)
             return false;
@@ -90,7 +101,8 @@ namespace
             if (i)
             {
                 float segment = (point - path[i - 1]).length();
-                if (!std::isfinite(segment) || segment <= PointPathTolerance)
+                float minimum = progress && i == 1 ? 0.0f : PointPathTolerance;
+                if (!std::isfinite(segment) || segment <= minimum)
                     return false;
                 length += segment;
             }
@@ -140,7 +152,8 @@ PointMovementGenerator<T>::PointMovementGenerator(uint32 pointId, Movement::Poin
         orientation, &path, false, false, std::nullopt, ObjectGuid::Empty, backwards)
 {
     _checkedPath = CheckedPath{unit.GetMapId(), unit.GetInstanceId(), unit.GetPhaseMask(),
-        unit.movespline->GetId(), unit.movespline->GetInterruptCount()};
+        unit.movespline->GetId(), unit.movespline->GetInterruptCount(),
+        PointPathGhost(unit), unit.HasUnitMovementFlag(MOVEMENTFLAG_WATERWALKING)};
 }
 
 template<class T>
@@ -179,11 +192,14 @@ bool PointMovementGenerator<T>::UpdateCheckedPath(T* unit, uint32 diff)
 
     if (!PointPathContext(*unit, checked.MapId, checked.InstanceId) ||
         unit->GetPhaseMask() != checked.PhaseMask ||
+        PointPathGhost(*unit) != checked.Ghost ||
+        unit->HasUnitMovementFlag(MOVEMENTFLAG_WATERWALKING) != checked.WaterWalking ||
         PointPathSpeed(*unit, _forcedMovement, speed, _reverseOrientation) <= 0.01f)
-        return FailCheckedPath(unit, "map, phase, movement mode or speed changed");
+        return FailCheckedPath(unit, "life state, map, phase, movement mode or speed changed");
 
     auto const& spline = *unit->movespline;
     G3D::Vector3 source = PointPathPosition(*unit);
+    G3D::Vector3 progressSource = source;
     std::size_t next = 1;
     bool stopped = false;
     if (!checked.Launched)
@@ -218,6 +234,7 @@ bool PointMovementGenerator<T>::UpdateCheckedPath(T* unit, uint32 diff)
             return FailCheckedPath(unit, "spline interrupted before arrival");
 
         source = spline.ComputePosition();
+        progressSource = source;
         next = spline.currentPathIdx() + 1;
     }
     else
@@ -229,6 +246,7 @@ bool PointMovementGenerator<T>::UpdateCheckedPath(T* unit, uint32 diff)
             return FailCheckedPath(unit, "owned stop provenance lost or source displaced");
 
         next = stop->PathIndex + 1;
+        progressSource = stop->Position;
         stopped = true;
     }
 
@@ -261,9 +279,20 @@ bool PointMovementGenerator<T>::UpdateCheckedPath(T* unit, uint32 diff)
     if (checked.Launched && !stopped && !i_recalculateSpeed)
         return true;
 
+    // Only the recorded segment can consume its exact endpoint; proximity to another vertex is not progress.
+    if (checked.Launched && source == m_precomputedPath[next] && progressSource == m_precomputedPath[next])
+    {
+        if (++next == m_precomputedPath.size())
+        {
+            checked.Arrived = true;
+            return false;
+        }
+    }
+
     Movement::PointsArray remaining{source};
     remaining.insert(remaining.end(), m_precomputedPath.begin() + next, m_precomputedPath.end());
-    if (!PointPathGeometry(remaining, PointPathSpeed(*unit, _forcedMovement, speed, _reverseOrientation)))
+    if (!PointPathGeometry(remaining, PointPathSpeed(*unit, _forcedMovement, speed, _reverseOrientation),
+        checked.Launched))
         return FailCheckedPath(unit, "remaining path cannot be launched safely");
 
     Movement::MoveSplineInit init(unit);
@@ -534,6 +563,8 @@ void PointMovementGenerator<T>::DoFinalize(T* unit)
             {
                 if (PointPathContext(*unit, _checkedPath->MapId, _checkedPath->InstanceId) &&
                     unit->GetPhaseMask() == _checkedPath->PhaseMask &&
+                    PointPathGhost(*unit) == _checkedPath->Ghost &&
+                    unit->HasUnitMovementFlag(MOVEMENTFLAG_WATERWALKING) == _checkedPath->WaterWalking &&
                     unit->movespline->GetInterruptCount() == _checkedPath->InterruptCount &&
                     SamePointPathPosition(PointPathPosition(*unit), unit->movespline->ComputePosition()))
                     unit->StopMoving();

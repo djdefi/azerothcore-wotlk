@@ -249,7 +249,9 @@ public:
      * Requires 2..MAX_POINT_PATH_LENGTH vertices, adjacent distances >0.01 yard and a representable linear
      * spline. Speed 0 selects current locomotion speed; positive speeds use the normal spline speed cap.
      * Orientation 0 leaves facing unspecified, as with MovePoint; positive orientation sets final facing.
-     * Map, instance and captured phase/frame must remain applicable. No swimming, flight, transport or vehicle.
+     * Map, instance and captured life/phase/frame must remain applicable. Released Player ghosts may waterwalk;
+     * living waterwalking, swimming, flight, transport and vehicle frames are unsupported. Initial adjacent
+     * distances must exceed 0.01 yard; an ordered, already-proven leading residual may be shorter on restart.
      * Unknown interruptions require replanning; known stops resume only from the owned spline's ordered progress.
      * GetCurrentSplineId() != 0 matching the non-finalized unit spline identifies an actual launch.
      */
