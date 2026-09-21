@@ -91,6 +91,14 @@ enum class AuctionHouseId : uint8
     Neutral     = 7
 };
 
+enum class AuctionFinalizationReason : uint8
+{
+    Unknown,   // Invalid-load cleanup or a caller that has not supplied a reason.
+    Sold,      // Accepted buyout or expiry with a winning bid.
+    Expired,   // Expiry without a bidder.
+    Cancelled  // Owner cancellation, including auctions with a bidder.
+};
+
 #define MAX_AUCTION_HOUSE_FACTIONS 3
 
 struct AuctionEntry
@@ -115,7 +123,8 @@ struct AuctionEntry
     [[nodiscard]] uint32 GetAuctionCut() const;
     [[nodiscard]] uint32 GetAuctionOutBid() const;
     [[nodiscard]] static uint32 CalculateAuctionOutBid(uint32 bid);
-    void DeleteFromDB(CharacterDatabaseTransaction trans) const;
+    void DeleteFromDB(CharacterDatabaseTransaction trans,
+        AuctionFinalizationReason reason = AuctionFinalizationReason::Unknown) const;
     void SaveToDB(CharacterDatabaseTransaction trans) const;
     bool LoadFromDB(Field* fields);
     [[nodiscard]] std::string BuildAuctionMailSubject(MailAuctionAnswers response) const;
