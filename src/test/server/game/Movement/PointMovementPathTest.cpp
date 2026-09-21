@@ -31,6 +31,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <type_traits>
 
 using namespace testing;
 
@@ -1269,7 +1270,7 @@ namespace
             std::filesystem::remove(_terrainFile);
         }
 
-        void BuildIslands(bool connectedPrefix = false)
+        void BuildIslands(bool connectedPrefix = false, bool steep = false)
         {
             // Detour YZX coordinates: ground X=[0,64] and X=[80,128], separated by an unwalkable gap.
             std::vector<unsigned short> vertices{
@@ -1291,6 +1292,11 @@ namespace
                     1, 4, 5, 2, 0xffff, 0xffff, 0xffff, 0,
                     6, 7, 8, 9, 0xffff, 0xffff, 0xffff, 0xffff
                 };
+                if (steep)
+                {
+                    vertices[4 * 3 + 1] = 100;
+                    vertices[5 * 3 + 1] = 100;
+                }
             }
             std::vector<unsigned short> flags(polygons.size() / 8, NAV_GROUND);
             std::vector<unsigned char> areas(flags.size(), 0);
@@ -1303,7 +1309,7 @@ namespace
             params.polyAreas = areas.data();
             params.nvp = 4;
             params.bmax[0] = 64.0f;
-            params.bmax[1] = 20.0f;
+            params.bmax[1] = steep ? 110.0f : 20.0f;
             params.bmax[2] = 128.0f;
             params.walkableHeight = 2.0f;
             params.walkableRadius = 0.5f;
@@ -1444,5 +1450,358 @@ namespace
         EXPECT_EQ(path.GetPath(), expected);
         EXPECT_EQ(path.GetPathType(), PATHFIND_NORMAL);
         EXPECT_EQ(path.GetActualEndPosition(), expected.back());
+    }
+
+    class PathQueryDiagnosticsTest : public PathGeneratorCorridorTest
+    {
+    protected:
+        using Check = PathQueryDiagnostics::Check;
+        using Lookup = PathQueryDiagnostics::Lookup;
+        using Shortcut = PathQueryDiagnostics::Shortcut;
+        using CorridorMode = PathQueryDiagnostics::CorridorMode;
+        using PointMode = PathQueryDiagnostics::PointMode;
+
+        PathQueryDiagnostics Compare(Unit* unit, G3D::Vector3 const& goal, bool force = false,
+            bool straight = false, bool raycast = false, float limit = 296.0f, bool slope = false)
+        {
+            PathGenerator ordinary(unit);
+            PathGenerator captured(unit);
+            for (auto* path : {&ordinary, &captured})
+            {
+                path->SetUseStraightPath(straight);
+                path->SetUseRaycast(raycast);
+                path->SetPathLengthLimit(limit);
+                path->SetSlopeCheck(slope);
+            }
+            PathQueryDiagnostics diagnostics;
+            bool original = ordinary.CalculatePath(goal.x, goal.y, goal.z, force);
+            bool observed = captured.CalculatePath(goal.x, goal.y, goal.z, force, diagnostics);
+            EXPECT_EQ(observed, original);
+            ExpectSamePath(ordinary, captured);
+            EXPECT_EQ(diagnostics.ResultUpdated, observed);
+            EXPECT_EQ(diagnostics.ResultType, captured.GetPathType());
+            EXPECT_EQ(diagnostics.ActualEnd, captured.GetActualEndPosition());
+            EXPECT_EQ(diagnostics.ResultPointCount, captured.GetPath().size());
+            EXPECT_EQ(diagnostics.End, goal);
+            EXPECT_EQ(diagnostics.MapId, unit->GetMapId());
+            EXPECT_EQ(diagnostics.InstanceId, unit->GetInstanceId());
+            EXPECT_EQ(diagnostics.PhaseMask, unit->GetPhaseMask());
+            EXPECT_FALSE(diagnostics.ExplicitStart);
+            EXPECT_EQ(diagnostics.UseStraightPath, straight);
+            EXPECT_EQ(diagnostics.UseRaycast, raycast);
+            EXPECT_EQ(diagnostics.ForceDestination, force);
+            EXPECT_EQ(diagnostics.SlopeCheck, slope);
+            return diagnostics;
+        }
+
+        void ExpectSamePath(PathGenerator const& original, PathGenerator const& captured)
+        {
+            EXPECT_EQ(captured.GetPathType(), original.GetPathType());
+            EXPECT_EQ(captured.GetPath(), original.GetPath());
+            EXPECT_EQ(captured.GetStartPosition(), original.GetStartPosition());
+            EXPECT_EQ(captured.GetEndPosition(), original.GetEndPosition());
+            EXPECT_EQ(captured.GetActualEndPosition(), original.GetActualEndPosition());
+        }
+    };
+
+    static_assert(std::is_trivially_copyable_v<PathQueryDiagnostics>);
+    static_assert(std::is_standard_layout_v<PathQueryDiagnostics>);
+    static_assert(sizeof(PathQueryDiagnostics) <= 512);
+
+    TEST_F(PathQueryDiagnosticsTest, MissingMeshPreservesUnevaluatedPrerequisites)
+    {
+        auto diagnostics = Compare(_unit.get(), {20, 10, 10});
+        EXPECT_EQ(diagnostics.ShortcutReason, Shortcut::Prerequisite);
+        EXPECT_EQ(diagnostics.HasNavMesh, Check::No);
+        EXPECT_EQ(diagnostics.HasNavMeshQuery, Check::NotEvaluated);
+        EXPECT_EQ(diagnostics.IgnorePathfinding, Check::NotEvaluated);
+        EXPECT_EQ(diagnostics.StartTile.Present, Check::NotEvaluated);
+        EXPECT_EQ(diagnostics.EndTile.Present, Check::NotEvaluated);
+        EXPECT_EQ(diagnostics.StartPolygon.Source, Lookup::NotEvaluated);
+        EXPECT_EQ(diagnostics.CorridorStage.Mode, CorridorMode::NotEvaluated);
+        EXPECT_EQ(diagnostics.PointStage.Mode, PointMode::NotEvaluated);
+        EXPECT_FALSE(diagnostics.FilterUpdated);
+        EXPECT_EQ(diagnostics.ResultType, PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH);
+    }
+
+    TEST_F(PathQueryDiagnosticsTest, IgnoredPathfindingDoesNotEvaluateTilesOrPolygons)
+    {
+        BuildIslands();
+        _unit->AddUnitState(UNIT_STATE_IGNORE_PATHFINDING);
+        auto diagnostics = Compare(_unit.get(), {20, 10, 10});
+        EXPECT_EQ(diagnostics.ShortcutReason, Shortcut::Prerequisite);
+        EXPECT_EQ(diagnostics.HasNavMesh, Check::Yes);
+        EXPECT_EQ(diagnostics.HasNavMeshQuery, Check::Yes);
+        EXPECT_EQ(diagnostics.IgnorePathfinding, Check::Yes);
+        EXPECT_EQ(diagnostics.StartTile.Present, Check::NotEvaluated);
+        EXPECT_EQ(diagnostics.EndTile.Present, Check::NotEvaluated);
+        EXPECT_EQ(diagnostics.EndPolygon.Source, Lookup::NotEvaluated);
+        EXPECT_FALSE(diagnostics.FilterUpdated);
+    }
+
+    TEST_F(PathQueryDiagnosticsTest, MissingStartAndEndTilesRetainOriginalShortCircuitOrder)
+    {
+        BuildIslands();
+        _unit->Relocate(-1, 10, 10);
+        auto startMissing = Compare(_unit.get(), {20, 10, 10});
+        EXPECT_EQ(startMissing.StartTile.Present, Check::No);
+        EXPECT_LT(startMissing.StartTile.Y, 0);
+        EXPECT_EQ(startMissing.EndTile.Present, Check::NotEvaluated);
+        EXPECT_EQ(startMissing.StartPolygon.Source, Lookup::NotEvaluated);
+        EXPECT_FALSE(startMissing.FilterUpdated);
+        _unit->Relocate(10, 10, 10);
+        auto endMissing = Compare(_unit.get(), {150, 10, 10});
+        EXPECT_EQ(endMissing.StartTile.Present, Check::Yes);
+        EXPECT_EQ(endMissing.StartTile.X, 0);
+        EXPECT_EQ(endMissing.StartTile.Y, 0);
+        EXPECT_EQ(endMissing.EndTile.Present, Check::No);
+        EXPECT_EQ(endMissing.EndTile.Y, 1);
+        EXPECT_EQ(endMissing.ShortcutReason, Shortcut::Prerequisite);
+        EXPECT_FALSE(endMissing.FilterUpdated);
+    }
+
+    TEST_F(PathQueryDiagnosticsTest, OriginalPlayerMissingPolygonShortcutKeepsLookupFacts)
+    {
+        BuildIslands();
+        CreatePlayer();
+        _player->Relocate(70, 10, 10);
+        auto diagnostics = Compare(_player.get(), {90, 10, 10});
+        EXPECT_EQ(diagnostics.ShortcutReason, Shortcut::MissingPolygon);
+        EXPECT_EQ(diagnostics.ResultType, PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH);
+        EXPECT_EQ(diagnostics.Start, G3D::Vector3(70, 10, 10));
+        EXPECT_EQ(diagnostics.StartPolygon.Source, Lookup::NotFound);
+        EXPECT_EQ(diagnostics.StartPolygon.Ref, INVALID_POLYREF);
+        EXPECT_EQ(diagnostics.StartPolygon.Distance, std::numeric_limits<float>::max());
+        EXPECT_EQ(diagnostics.StartPolygon.SmallSearchSucceeded, Check::Yes);
+        EXPECT_EQ(diagnostics.StartPolygon.TallSearchSucceeded, Check::Yes);
+        EXPECT_EQ(diagnostics.EndPolygon.Source, Lookup::SmallExtent);
+        EXPECT_NE(diagnostics.EndPolygon.Ref, INVALID_POLYREF);
+        EXPECT_EQ(diagnostics.StartFar, Check::NotEvaluated);
+        EXPECT_EQ(diagnostics.CorridorStage.Mode, CorridorMode::NotEvaluated);
+        EXPECT_TRUE(diagnostics.FilterUpdated);
+        EXPECT_EQ(diagnostics.UsedIncludeFlags, diagnostics.EntryIncludeFlags);
+        EXPECT_EQ(diagnostics.UsedExcludeFlags, diagnostics.EntryExcludeFlags);
+    }
+
+    TEST_F(PathQueryDiagnosticsTest, CreatureMissingPolygonFailureIsNotMislabelledAsPlayerShortcut)
+    {
+        BuildIslands();
+        auto diagnostics = Compare(_unit.get(), {70, 10, 10});
+        EXPECT_EQ(diagnostics.ResultType, PATHFIND_NOPATH);
+        EXPECT_EQ(diagnostics.ShortcutReason, Shortcut::None);
+        EXPECT_EQ(diagnostics.StartPolygon.Source, Lookup::SmallExtent);
+        EXPECT_EQ(diagnostics.EndPolygon.Source, Lookup::NotFound);
+        EXPECT_EQ(diagnostics.StartFar, Check::NotEvaluated);
+        EXPECT_EQ(diagnostics.EndFar, Check::NotEvaluated);
+    }
+
+    TEST_F(PathQueryDiagnosticsTest, FarPolygonFlightShortcutRetainsTallLookupAndRawSource)
+    {
+        BuildIslands();
+        _unit->AddUnitMovementFlag(MOVEMENTFLAG_FLYING);
+        _unit->Relocate(10, 10, 30);
+        auto diagnostics = Compare(_unit.get(), {20, 10, 30});
+        EXPECT_EQ(diagnostics.ShortcutReason, Shortcut::FarFromPolygon);
+        EXPECT_EQ(diagnostics.Start, G3D::Vector3(10, 10, 30));
+        EXPECT_EQ(diagnostics.StartPolygon.Source, Lookup::TallExtent);
+        EXPECT_EQ(diagnostics.EndPolygon.Source, Lookup::TallExtent);
+        EXPECT_FLOAT_EQ(diagnostics.StartPolygon.Distance, 20.0f);
+        EXPECT_EQ(diagnostics.StartFar, Check::Yes);
+        EXPECT_EQ(diagnostics.EndFar, Check::Yes);
+        EXPECT_EQ(diagnostics.ResultType, PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH | PATHFIND_FARFROMPOLY);
+        EXPECT_EQ(diagnostics.CorridorStage.Mode, CorridorMode::NotEvaluated);
+    }
+
+    TEST_F(PathQueryDiagnosticsTest, ForcedEndpointDoesNotOverwriteOriginalPartialCorridorFacts)
+    {
+        BuildIslands();
+        auto diagnostics = Compare(_unit.get(), {90, 10, 10}, true);
+        EXPECT_EQ(diagnostics.ShortcutReason, Shortcut::ForcedDestination);
+        EXPECT_EQ(diagnostics.CorridorStage.Mode, CorridorMode::FindPath);
+        EXPECT_TRUE(diagnostics.CorridorStage.StatusAvailable);
+        EXPECT_NE(diagnostics.CorridorStage.Status & DT_PARTIAL_RESULT, 0u);
+        EXPECT_EQ(diagnostics.CorridorStage.PolyCount, 1u);
+        EXPECT_EQ(diagnostics.CorridorStage.LastPoly, diagnostics.StartPolygon.Ref);
+        EXPECT_NE(diagnostics.CorridorStage.LastPoly, diagnostics.EndPolygon.Ref);
+        EXPECT_EQ(diagnostics.CorridorStage.ReachesEndPolygon, Check::No);
+        EXPECT_EQ(diagnostics.ResultType, PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH);
+        EXPECT_EQ(diagnostics.ActualEnd, G3D::Vector3(90, 10, 10));
+    }
+
+    TEST_F(PathQueryDiagnosticsTest, PartialCorridorAndOnePointNoProgressRemainDistinctFromErrors)
+    {
+        BuildIslands(true);
+        auto partial = Compare(_unit.get(), {90, 10, 10});
+        EXPECT_EQ(partial.ResultType, PATHFIND_INCOMPLETE);
+        EXPECT_EQ(partial.ShortcutReason, Shortcut::None);
+        EXPECT_EQ(partial.CorridorStage.PolyCount, 2u);
+        EXPECT_EQ(partial.CorridorStage.ReachesEndPolygon, Check::No);
+        EXPECT_EQ(partial.PointStage.Mode, PointMode::Smooth);
+        EXPECT_TRUE(partial.PointStage.StatusAvailable);
+        EXPECT_TRUE(dtStatusSucceed(partial.PointStage.Status));
+        EXPECT_GT(partial.PointStage.Count, 1u);
+        EXPECT_EQ(partial.ActualEnd, G3D::Vector3(64, 10, 10));
+        _unit->Relocate(64, 10, 10);
+        auto stopped = Compare(_unit.get(), {90, 10, 10});
+        EXPECT_EQ(stopped.ResultType, PATHFIND_INCOMPLETE);
+        EXPECT_EQ(stopped.PointStage.Count, 1u);
+        EXPECT_EQ(stopped.ResultPointCount, 1u);
+        EXPECT_EQ(stopped.ActualEnd, G3D::Vector3(64, 10, 10));
+    }
+
+    TEST_F(PathQueryDiagnosticsTest, CompletePathsAndPointLimitExposeActualPointStage)
+    {
+        BuildIslands();
+        for (bool straight : {false, true})
+        {
+            auto complete = Compare(_unit.get(), {10.1f, 10, 10}, false, straight, false, 296.0f, true);
+            EXPECT_EQ(complete.CorridorStage.Mode, CorridorMode::SamePolygon);
+            EXPECT_FALSE(complete.CorridorStage.StatusAvailable);
+            EXPECT_EQ(complete.CorridorStage.ReachesEndPolygon, Check::Yes);
+            EXPECT_EQ(complete.ResultType, PATHFIND_NORMAL);
+            EXPECT_EQ(complete.PointStage.Mode, straight ? PointMode::Straight : PointMode::Smooth);
+            EXPECT_EQ(complete.PointStage.Count, straight ? 2u : 1u);
+            EXPECT_EQ(complete.PointStage.LimitReached, straight ? Check::No : Check::NotEvaluated);
+            EXPECT_EQ(complete.ResultPointCount, 2u);
+        }
+        auto limited = Compare(_unit.get(), {60, 10, 10}, false, false, false, 8.0f);
+        EXPECT_EQ(limited.PointLimit, 2u);
+        EXPECT_EQ(limited.PointStage.Count, 2u);
+        EXPECT_EQ(limited.PointStage.LimitReached, Check::Yes);
+        EXPECT_NE(limited.ResultType & PATHFIND_SHORT, 0);
+        EXPECT_EQ(limited.ShortcutReason, Shortcut::None);
+    }
+
+    TEST_F(PathQueryDiagnosticsTest, RaycastEvidenceIsFromOriginalClearOrBlockedQuery)
+    {
+        BuildIslands();
+        auto clear = Compare(_unit.get(), {20, 10, 10}, false, false, true);
+        EXPECT_EQ(clear.CorridorStage.Mode, CorridorMode::Raycast);
+        EXPECT_TRUE(clear.CorridorStage.StatusAvailable);
+        EXPECT_EQ(clear.CorridorStage.RaycastClear, Check::Yes);
+        EXPECT_EQ(clear.CorridorStage.RaycastHit, std::numeric_limits<float>::max());
+        EXPECT_EQ(clear.PointStage.Mode, PointMode::Raycast);
+        EXPECT_FALSE(clear.PointStage.StatusAvailable);
+        auto blocked = Compare(_unit.get(), {90, 10, 10}, false, false, true);
+        EXPECT_EQ(blocked.CorridorStage.RaycastClear, Check::No);
+        EXPECT_GT(blocked.CorridorStage.RaycastHit, 0.0f);
+        EXPECT_LT(blocked.CorridorStage.RaycastHit, 1.0f);
+        EXPECT_EQ(blocked.ResultType, PATHFIND_INCOMPLETE);
+        EXPECT_EQ(blocked.PointStage.Count, 2u);
+    }
+
+    TEST_F(PathQueryDiagnosticsTest, SlopeLimitedPointsKeepTheirOriginalStatusAndReachablePrefix)
+    {
+        BuildIslands(true, true);
+        auto diagnostics = Compare(_unit.get(), {60, 10, 88.75f}, false, false, false, 296.0f, true);
+        EXPECT_TRUE(diagnostics.PointStage.StatusAvailable);
+        EXPECT_NE(diagnostics.PointStage.Status & DT_SLOPE_TOO_STEEP, 0u);
+        EXPECT_EQ(diagnostics.PointStage.SlopeLimited, Check::Yes);
+        EXPECT_EQ(diagnostics.PointStage.LimitReached, Check::NotEvaluated);
+        EXPECT_EQ(diagnostics.ResultType, PATHFIND_NORMAL | PATHFIND_INCOMPLETE);
+        EXPECT_LT(diagnostics.ActualEnd.x, 60.0f);
+        EXPECT_EQ(diagnostics.CorridorStage.ReachesEndPolygon, Check::Yes);
+        EXPECT_EQ(diagnostics.ShortcutReason, Shortcut::None);
+    }
+
+    TEST_F(PathQueryDiagnosticsTest, SinkResetsAfterInvalidAttemptWithoutMisreportingRetainedPath)
+    {
+        BuildIslands();
+        PathGenerator original(_unit.get());
+        PathGenerator captured(_unit.get());
+        PathQueryDiagnostics diagnostics;
+        ASSERT_TRUE(original.CalculatePath(90, 10, 10, true));
+        ASSERT_TRUE(captured.CalculatePath(90, 10, 10, true, diagnostics));
+        ASSERT_EQ(diagnostics.ShortcutReason, Shortcut::ForcedDestination);
+        auto previous = captured.GetPath();
+        float invalid = std::numeric_limits<float>::quiet_NaN();
+        EXPECT_FALSE(original.CalculatePath(invalid, 10, 10, false));
+        EXPECT_FALSE(captured.CalculatePath(invalid, 10, 10, false, diagnostics));
+        ExpectSamePath(original, captured);
+        EXPECT_EQ(captured.GetPath(), previous);
+        EXPECT_FALSE(diagnostics.ResultUpdated);
+        EXPECT_EQ(diagnostics.ResultType, PATHFIND_BLANK);
+        EXPECT_EQ(diagnostics.ResultPointCount, 0u);
+        EXPECT_EQ(diagnostics.CoordinatesValid, Check::No);
+        EXPECT_EQ(diagnostics.HasNavMesh, Check::NotEvaluated);
+        EXPECT_EQ(diagnostics.StartPolygon.Source, Lookup::NotEvaluated);
+        EXPECT_EQ(diagnostics.CorridorStage.Mode, CorridorMode::NotEvaluated);
+        EXPECT_EQ(diagnostics.ShortcutReason, Shortcut::None);
+        EXPECT_TRUE(std::isnan(diagnostics.End.x));
+        EXPECT_FALSE(original.CalculatePath(invalid, 10, 10, 20, 10, 10, false));
+        EXPECT_FALSE(captured.CalculatePath(invalid, 10, 10, 20, 10, 10, false, diagnostics));
+        ExpectSamePath(original, captured);
+        EXPECT_TRUE(diagnostics.ExplicitStart);
+        EXPECT_TRUE(std::isnan(diagnostics.Start.x));
+        EXPECT_EQ(diagnostics.End, G3D::Vector3(20, 10, 10));
+        EXPECT_FALSE(diagnostics.ResultUpdated);
+        EXPECT_EQ(diagnostics.HasNavMesh, Check::NotEvaluated);
+    }
+
+    TEST_F(PathQueryDiagnosticsTest, ReusedGeneratorRecordsCacheAndExtensionWithoutAnotherLookup)
+    {
+        BuildIslands(true);
+        PathGenerator original(_unit.get());
+        PathGenerator captured(_unit.get());
+        PathQueryDiagnostics diagnostics;
+        for (float goalX : {50.0f, 60.0f, 90.0f, 150.0f})
+        {
+            ASSERT_EQ(original.CalculatePath(goalX, 10, 10, false),
+                captured.CalculatePath(goalX, 10, 10, false, diagnostics));
+            ExpectSamePath(original, captured);
+            if (goalX == 60.0f)
+            {
+                EXPECT_EQ(diagnostics.StartPolygon.Source, Lookup::CachedCorridor);
+                EXPECT_EQ(diagnostics.EndPolygon.Source, Lookup::CachedCorridor);
+                EXPECT_EQ(diagnostics.StartPolygon.SmallSearchSucceeded, Check::NotEvaluated);
+                EXPECT_EQ(diagnostics.EndPolygon.TallSearchSucceeded, Check::NotEvaluated);
+                EXPECT_EQ(diagnostics.CorridorStage.Mode, CorridorMode::Reused);
+                EXPECT_FALSE(diagnostics.CorridorStage.StatusAvailable);
+                EXPECT_EQ(diagnostics.CorridorStage.PolyCount, 2u);
+            }
+            if (goalX == 90.0f)
+            {
+                EXPECT_EQ(diagnostics.CorridorStage.Mode, CorridorMode::Extended);
+                EXPECT_TRUE(diagnostics.CorridorStage.StatusAvailable);
+                EXPECT_NE(diagnostics.CorridorStage.Status & DT_PARTIAL_RESULT, 0u);
+                EXPECT_EQ(diagnostics.CorridorStage.ReachesEndPolygon, Check::No);
+            }
+            if (goalX == 150.0f)
+            {
+                EXPECT_EQ(diagnostics.ShortcutReason, Shortcut::Prerequisite);
+                EXPECT_EQ(diagnostics.EndTile.Present, Check::No);
+                EXPECT_EQ(diagnostics.StartPolygon.Source, Lookup::NotEvaluated);
+                EXPECT_EQ(diagnostics.CorridorStage.Mode, CorridorMode::NotEvaluated);
+                EXPECT_EQ(diagnostics.CorridorStage.PolyCount, 0u);
+                EXPECT_EQ(diagnostics.CorridorStage.LastPoly, INVALID_POLYREF);
+                EXPECT_FALSE(diagnostics.CorridorStage.StatusAvailable);
+                EXPECT_FALSE(diagnostics.FilterUpdated);
+            }
+        }
+    }
+
+    TEST_F(PathQueryDiagnosticsTest, ExplicitStartSnapshotIsNotActorPositionOrNormalizedPathFront)
+    {
+        BuildIslands();
+        PathGenerator original(_unit.get());
+        PathGenerator captured(_unit.get());
+        PathQueryDiagnostics diagnostics;
+        EXPECT_EQ(original.CalculatePath(15, 10, 10.5f, 20, 10, 10.5f, false),
+            captured.CalculatePath(15, 10, 10.5f, 20, 10, 10.5f, false, diagnostics));
+        ExpectSamePath(original, captured);
+        EXPECT_TRUE(diagnostics.ExplicitStart);
+        EXPECT_EQ(diagnostics.Start, G3D::Vector3(15, 10, 10.5f));
+        EXPECT_EQ(diagnostics.End, G3D::Vector3(20, 10, 10.5f));
+        EXPECT_EQ(captured.GetPath().front(), G3D::Vector3(15, 10, 10));
+        EXPECT_EQ(diagnostics.ActualEnd, G3D::Vector3(20, 10, 10));
+        EXPECT_FLOAT_EQ(_unit->GetPositionX(), 10.0f);
+        EXPECT_FLOAT_EQ(_unit->GetPositionZ(), 10.0f);
+        captured.Clear();
+        EXPECT_TRUE(captured.GetPath().empty());
+        EXPECT_EQ(diagnostics.Start, G3D::Vector3(15, 10, 10.5f));
+        EXPECT_TRUE(diagnostics.ResultUpdated);
+        ASSERT_TRUE(captured.CalculatePath(40, 10, 10, false));
+        EXPECT_EQ(diagnostics.End, G3D::Vector3(20, 10, 10.5f));
+        EXPECT_EQ(diagnostics.ActualEnd, G3D::Vector3(20, 10, 10));
     }
 }
