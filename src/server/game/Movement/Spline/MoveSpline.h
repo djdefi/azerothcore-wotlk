@@ -20,6 +20,7 @@
 
 #include "MoveSplineInitArgs.h"
 #include "Spline.h"
+#include <optional>
 
 namespace Movement
 {
@@ -39,6 +40,13 @@ namespace Movement
     class MoveSpline
     {
     public:
+        struct StopInfo
+        {
+            uint32 SplineId;
+            int32 PathIndex;
+            Location Position;
+        };
+
         typedef Spline<int32> MySpline;
         enum UpdateResult
         {
@@ -68,6 +76,8 @@ namespace Movement
         int32           effect_start_time;
         int32           point_Idx;
         int32           point_Idx_offset;
+        std::optional<StopInfo> _lastStop;
+        uint64 _interruptCount = 0;
 
         void init_spline(const MoveSplineInitArgs& args);
 
@@ -88,7 +98,9 @@ namespace Movement
         [[nodiscard]] int32 _currentSplineIdx() const { return point_Idx; }
         [[nodiscard]] float Velocity() const { return velocity; }
         void _Finalize();
-        void _Interrupt() { splineflags.done = true; }
+        void _Interrupt() { splineflags.done = true; ++_interruptCount; _lastStop.reset(); }
+        [[nodiscard]] uint64 GetInterruptCount() const { return _interruptCount; }
+        [[nodiscard]] std::optional<StopInfo> const& GetLastStop() const { return _lastStop; }
 
     public:
         void Initialize(const MoveSplineInitArgs&);

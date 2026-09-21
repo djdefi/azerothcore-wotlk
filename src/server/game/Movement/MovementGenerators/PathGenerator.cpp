@@ -552,14 +552,18 @@ void PathGenerator::BuildPointPath(const float* startPoint, const float* endPoin
             _pointPathLimit);    // maximum number of points
     }
 
-    // Special case with start and end positions very close to each other
-    if (_polyLength == 1 && pointCount == 1 && !(dtResult & DT_SLOPE_TOO_STEEP))
+    // A successful partial query may have no progress beyond its one reachable point.
+    bool const partialNoProgress = pointCount == 1 && dtStatusSucceed(dtResult) && (_type & PATHFIND_INCOMPLETE);
+
+    // Special case with reachable start and end positions very close to each other.
+    if (_polyLength == 1 && pointCount == 1 && dtResult == DT_SUCCESS &&
+        (_type & PATHFIND_NORMAL) && !(_type & (PATHFIND_INCOMPLETE | PATHFIND_NOPATH)))
     {
         // First point is start position, append end position
         dtVcopy(&pathPoints[1 * VERTEX_SIZE], endPoint);
         pointCount++;
     }
-    else if (pointCount < 2 || dtStatusFailed(dtResult))
+    else if ((pointCount < 2 && !partialNoProgress) || dtStatusFailed(dtResult))
     {
         // If its too steep, just return incomplete path.
         if (pointCount > 0 && dtResult & DT_SLOPE_TOO_STEEP)
@@ -584,7 +588,7 @@ void PathGenerator::BuildPointPath(const float* startPoint, const float* endPoin
         _type = PathType(_type | PATHFIND_NOPATH);
         return;
     }
-    else if (pointCount >= _pointPathLimit)
+    else if (pointCount >= _pointPathLimit && !partialNoProgress)
     {
         BuildShortcut();
         _type = PathType(_type | PATHFIND_SHORT);
@@ -818,13 +822,16 @@ dtStatus PathGenerator::FindSmoothPath(float const* startPos, float const* endPo
     *smoothPathSize = 0;
     uint32 nsmoothPath = 0;
 
+    if (!polyPath || !polyPathSize || polyPathSize > MAX_PATH_LENGTH)
+        return DT_FAILURE;
+
     dtPolyRef polys[MAX_PATH_LENGTH];
     memcpy(polys, polyPath, sizeof(dtPolyRef) * polyPathSize);
     uint32 npolys = polyPathSize;
 
     float iterPos[VERTEX_SIZE], targetPos[VERTEX_SIZE];
 
-    if (polyPathSize > 1)
+    if (polyPathSize > 1 || (_type & PATHFIND_INCOMPLETE))
     {
         // Pick the closest points on poly border
         if (dtStatusFailed(_navMeshQuery->closestPointOnPolyBoundary(polys[0], startPos, iterPos)))

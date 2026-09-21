@@ -86,6 +86,16 @@ void ScriptMgr::OnBeforeAuctionHouseMgrUpdate()
     CALL_ENABLED_HOOKS(AuctionHouseScript, AUCTIONHOUSEHOOK_ON_BEFORE_AUCTIONHOUSEMGR_UPDATE, script->OnBeforeAuctionHouseMgrUpdate());
 }
 
+void ScriptMgr::OnBeforeAuctionFinalization(AuctionEntry const* entry, AuctionFinalizationReason reason,
+    CharacterDatabaseTransaction trans)
+{
+    ASSERT(entry);
+    ASSERT(trans);
+
+    CALL_ENABLED_HOOKS(AuctionHouseScript, AUCTIONHOUSEHOOK_ON_BEFORE_AUCTION_FINALIZATION,
+        script->OnBeforeAuctionFinalization(entry, reason, trans));
+}
+
 AuctionHouseScript::AuctionHouseScript(const char* name, std::vector<uint16> enabledHooks)
     : ScriptObject(name, AUCTIONHOUSEHOOK_END)
 {

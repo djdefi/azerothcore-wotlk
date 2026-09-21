@@ -281,6 +281,8 @@ public: /* AuctionHouseScript */
     void OnAuctionRemove(AuctionHouseObject* ah, AuctionEntry* entry);
     void OnAuctionSuccessful(AuctionHouseObject* ah, AuctionEntry* entry);
     void OnAuctionExpire(AuctionHouseObject* ah, AuctionEntry* entry);
+    void OnBeforeAuctionFinalization(AuctionEntry const* entry, AuctionFinalizationReason reason,
+        CharacterDatabaseTransaction trans);
     void OnBeforeAuctionHouseMgrSendAuctionWonMail(AuctionHouseMgr* auctionHouseMgr, AuctionEntry* auction, Player* bidder, uint32& bidder_accId, bool& sendNotification, bool& updateAchievementCriteria, bool& sendMail);
     void OnBeforeAuctionHouseMgrSendAuctionSalePendingMail(AuctionHouseMgr* auctionHouseMgr, AuctionEntry* auction, Player* owner, uint32& owner_accId, bool& sendMail);
     void OnBeforeAuctionHouseMgrSendAuctionSuccessfulMail(AuctionHouseMgr* auctionHouseMgr, AuctionEntry* auction, Player* owner, uint32& owner_accId, uint32& profit, bool& sendNotification, bool& updateAchievementCriteria, bool& sendMail);

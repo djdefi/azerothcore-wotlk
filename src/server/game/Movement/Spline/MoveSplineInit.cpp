@@ -128,15 +128,20 @@ namespace Movement
 
     void MoveSplineInit::Stop()
     {
+        Stop(false);
+    }
+
+    void MoveSplineInit::Stop(bool forceCurrentPosition)
+    {
         MoveSpline& move_spline = *unit->movespline;
 
         // No need to stop if we are not moving
-        if (move_spline.Finalized())
+        if (move_spline.Finalized() && !forceCurrentPosition)
             return;
 
         bool transport = unit->HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT) && unit->GetTransGUID();
         Location loc;
-        if (move_spline.onTransport == transport)
+        if (!forceCurrentPosition && move_spline.onTransport == transport)
             loc = move_spline.ComputePosition();
         else
         {
@@ -151,6 +156,9 @@ namespace Movement
             loc.z = pos->GetPositionZ();
             loc.orientation = unit->GetOrientation();
         }
+
+        if (forceCurrentPosition)
+            move_spline._Interrupt();
 
         args.flags = MoveSplineFlag::Done;
         unit->m_movementInfo.RemoveMovementFlag(MOVEMENTFLAG_FORWARD | MOVEMENTFLAG_BACKWARD | MOVEMENTFLAG_SPLINE_ENABLED);
