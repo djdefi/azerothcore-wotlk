@@ -122,8 +122,7 @@ namespace Movement
 
         // Retire an opt-in contribution only after validation, before a replacement commits its state.
         if (!token)
-            moveFlags &= ~unit->PrepareFallSplineTransition(args.flags.falling || args.flags.parabolic ||
-                args.flags.flying || args.flags.transportEnter || args.flags.transportExit);
+            moveFlags &= ~unit->PrepareFallSplineTransition(args.flags.falling || args.flags.parabolic);
         else
             moveFlags |= MOVEMENTFLAG_FALLING;
 

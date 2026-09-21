@@ -231,16 +231,10 @@ void Unit::SetUnitMovementFlags(uint32 flags)
     bool hasClaim = HasOwnedFall() || (_ownedFall && _ownedFall->OwnsBookkeeping);
     if (hasClaim && ((flags & ForeignFrames) || ((flags ^ previousFlags) & FallFlags)))
     {
-        bool ownedContribution = movespline->GetId() == _ownedFall->Status.SplineId &&
-            OwnedFallContextMatches() && !(previousFlags & MOVEMENTFLAG_FALLING_FAR);
         RevokeOwnedFall();
-        if (ownedContribution)
-        {
-            flags &= ~MOVEMENTFLAG_FALLING;
-            // A copied mask cannot resurrect the server-spline marker cleared by stopping that owned spline.
-            if (movespline->Finalized() && !m_movementInfo.HasMovementFlag(MOVEMENTFLAG_SPLINE_ENABLED))
-                flags &= ~MOVEMENTFLAG_SPLINE_ENABLED;
-        }
+        // Bookkeeping debt alone owns no falling bit. Preserve a genuine new 0-to-1 assertion.
+        uint32 released = previousFlags & ~m_movementInfo.flags;
+        flags &= ~(released & (MOVEMENTFLAG_FALLING | MOVEMENTFLAG_SPLINE_ENABLED));
     }
     if (foreignChange && _ownedFall)
         ++_ownedFall->BookkeepingVersion;

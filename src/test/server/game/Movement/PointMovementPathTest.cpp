@@ -2326,4 +2326,237 @@ namespace
         EXPECT_FALSE(_player->GetOwnedFallStatus({1}));
         EXPECT_EQ(_player->GetHealth(), 100u);
     }
+
+    TEST_F(OwnedFallMovementTest, LandingDebtDoesNotOwnANewWholeMaskFallAssertion)
+    {
+        ON_CALL(*static_cast<PointPathWorld*>(sWorld.get()), getRate(_)).WillByDefault(Return(1.0f));
+        _player->Relocate(10, 10, 30);
+        _player->SetFallInformation(0, 30);
+        auto token = _player->GetMotionMaster()->MoveFallOwned(81);
+        ASSERT_TRUE(token);
+        _token = *token;
+        _player->OnEnvironmentalDamage = [&]
+        {
+            EXPECT_FALSE(_player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING));
+            _player->SetUnitMovementFlags(_player->GetUnitMovementFlags() | MOVEMENTFLAG_FALLING);
+            EXPECT_TRUE(_player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING));
+            _player->SetFallInformation(555, 60);
+        };
+        Tick(_player->movespline->Duration());
+        EXPECT_EQ(Status().Result, OwnedFallResult::Landed);
+        EXPECT_TRUE(Status().LandingHandled);
+        EXPECT_TRUE(_player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING));
+        EXPECT_TRUE(_player->IsFalling());
+        EXPECT_FALSE(_player->GetMotionMaster()->CancelOwnedFall(_token));
+        EXPECT_TRUE(_player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING));
+        MovementInfo probe = _player->m_movementInfo;
+        probe.pos.Relocate(_player->GetPosition());
+        probe.fallTime = 1;
+        _player->UpdateFallInformationIfNeed(probe, MSG_MOVE_HEARTBEAT);
+        EXPECT_FALSE(_player->IsFalling());
+    }
+
+    TEST_F(OwnedFallMovementTest, SplineOnlyFlyAndTransportAnimationsDoNotClaimUnitFallState)
+    {
+        for (unsigned mode = 0; mode < 3; ++mode)
+        {
+            SCOPED_TRACE(mode);
+            Begin();
+            Tick(100);
+            float sourceZ = _player->GetPositionZ();
+            ASSERT_LT(sourceZ, 12.0f);
+            Movement::MoveSplineInit foreign(_player.get());
+            foreign.MovebyPath({{10, 10, sourceZ}, {15, 10, 10}});
+            if (mode == 0)
+                foreign.SetFly();
+            else if (mode == 1)
+                foreign.SetTransportEnter();
+            else
+                foreign.SetTransportExit();
+            ASSERT_GT(foreign.Launch(), 0);
+            uint32 foreignId = _player->movespline->GetId();
+            EXPECT_FALSE(_player->movespline->isFalling());
+            EXPECT_FALSE(_player->movespline->onTransport);
+            EXPECT_EQ(_player->movespline->isBoarding(), mode != 0);
+            EXPECT_FALSE(_player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING));
+            EXPECT_FALSE(_player->IsFalling());
+            EXPECT_EQ(Status().Result, OwnedFallResult::Replaced);
+            EXPECT_FALSE(Status().LandingHandled);
+            EXPECT_FALSE(_player->GetMotionMaster()->CancelOwnedFall(_token));
+            EXPECT_EQ(_player->movespline->GetId(), foreignId);
+            Tick(_player->movespline->Duration());
+            EXPECT_EQ(_player->movespline->FinalDestination(), G3D::Vector3(15, 10, 10));
+            EXPECT_EQ(_player->GetPositionX(), 15.0f);
+            EXPECT_TRUE(_player->GetMotionMaster()->MovePointPath(82, {{15, 10, 10}, {20, 10, 10}}, 0, 0));
+            _player->GetMotionMaster()->Clear();
+            _player->StopMoving();
+            _player->RemoveUnitMovementFlag(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR);
+            _player->Relocate(10, 10, 12);
+            _player->SetFallInformation(0, 12);
+        }
+    }
+
+    TEST_F(OwnedFallMovementTest, SupportedClaimWriterAndIncomingSplineMatrix)
+    {
+        ON_CALL(*static_cast<PointPathWorld*>(sWorld.get()), getRate(_)).WillByDefault(Return(1.0f));
+        unsigned transitions = 0;
+        // Claim: none, active fall, landing bookkeeping only. Writer: none, explicit Add, whole-mask OR.
+        for (unsigned claim = 0; claim < 3; ++claim)
+        {
+            for (unsigned writer = 0; writer < 3; ++writer)
+            {
+                // Incoming: ground, falling, parabolic, flying, enter, exit, refused validation.
+                for (unsigned mode = 0; mode < 7; ++mode)
+                {
+                    SCOPED_TRACE(testing::Message() << "claim=" << claim << " writer=" << writer << " mode=" << mode);
+                    _player->GetMotionMaster()->Clear();
+                    _player->StopMoving();
+                    _player->RemoveUnitMovementFlag(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR);
+                    _player->Relocate(10, 10, claim == 2 ? 30.0f : 12.0f);
+                    _player->SetFallInformation(0, _player->GetPositionZ());
+                    _player->SetHealth(100);
+                    auto transition = [&]
+                    {
+                        if (writer == 1)
+                            _player->AddUnitMovementFlag(MOVEMENTFLAG_FALLING);
+                        else if (writer == 2)
+                            _player->SetUnitMovementFlags(_player->GetUnitMovementFlags() | MOVEMENTFLAG_FALLING);
+
+                        uint32 beforeFlags = _player->GetUnitMovementFlags();
+                        uint32 beforeSpline = _player->movespline->GetId();
+                        bool beforeBookkeeping = _player->IsFalling();
+                        Movement::MoveSplineInit incoming(_player.get());
+                        incoming.MovebyPath({{10, 10, _player->GetPositionZ()}, {15, 10, 10}});
+                        if (mode == 1)
+                            incoming.SetFall();
+                        else if (mode == 2)
+                            incoming.SetParabolic(1, 0);
+                        else if (mode == 3)
+                            incoming.SetFly();
+                        else if (mode == 4)
+                            incoming.SetTransportEnter();
+                        else if (mode == 5)
+                            incoming.SetTransportExit();
+                        else if (mode == 6)
+                            incoming.SetVelocity(0);
+
+                        if (mode == 6)
+                        {
+                            EXPECT_EQ(incoming.Launch(), 0);
+                            EXPECT_EQ(_player->GetUnitMovementFlags(), beforeFlags);
+                            EXPECT_EQ(_player->movespline->GetId(), beforeSpline);
+                            EXPECT_EQ(_player->IsFalling(), beforeBookkeeping);
+                        }
+                        else
+                        {
+                            EXPECT_GT(incoming.Launch(), 0);
+                            bool explicitForeign = writer == 1 || (writer == 2 && claim != 1);
+                            bool inheritedAir = claim == 1 && writer != 1 && (mode == 1 || mode == 2);
+                            EXPECT_EQ(_player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING),
+                                explicitForeign || inheritedAir);
+                            EXPECT_EQ(_player->IsFalling(), inheritedAir);
+                            EXPECT_EQ(_player->movespline->isFalling(), mode == 1);
+                            EXPECT_EQ(_player->movespline->isBoarding(), mode == 4 || mode == 5);
+                            EXPECT_EQ(_player->movespline->_Spline().mode(), mode == 3
+                                ? Movement::SplineBase::ModeCatmullrom : Movement::SplineBase::ModeLinear);
+                            EXPECT_FALSE(_player->movespline->onTransport);
+                        }
+                        ++transitions;
+                    };
+
+                    if (claim == 0)
+                        transition();
+                    else if (claim == 1)
+                    {
+                        Begin();
+                        Tick(100);
+                        ASSERT_LT(_player->GetPositionZ(), 12.0f);
+                        transition();
+                    }
+                    else
+                    {
+                        auto token = _player->GetMotionMaster()->MoveFallOwned(81);
+                        ASSERT_TRUE(token);
+                        _token = *token;
+                        _player->OnEnvironmentalDamage = [&]
+                        {
+                            EXPECT_EQ(Status().Result, OwnedFallResult::Landed);
+                            EXPECT_FALSE(Status().LandingHandled);
+                            EXPECT_FALSE(_player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING));
+                            transition();
+                        };
+                        Tick(_player->movespline->Duration());
+                    }
+                }
+            }
+        }
+        EXPECT_EQ(transitions, 63u);
+    }
+
+    TEST_F(OwnedFallMovementTest, ActiveBookkeepingOnlyAndNoClaimSetterMatrix)
+    {
+        ON_CALL(*static_cast<PointPathWorld*>(sWorld.get()), getRate(_)).WillByDefault(Return(1.0f));
+        unsigned transitions = 0;
+        for (unsigned claim = 0; claim < 3; ++claim)
+        {
+            // Setter: whole WALKING, whole SWIMMING, whole FALLING, explicit FALLING, explicit bookkeeping.
+            for (unsigned writer = 0; writer < 5; ++writer)
+            {
+                SCOPED_TRACE(testing::Message() << "claim=" << claim << " writer=" << writer);
+                _player->GetMotionMaster()->Clear();
+                _player->StopMoving();
+                _player->RemoveUnitMovementFlag(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR |
+                    MOVEMENTFLAG_WALKING | MOVEMENTFLAG_SWIMMING);
+                _player->Relocate(10, 10, claim == 2 ? 30.0f : 12.0f);
+                _player->SetFallInformation(0, _player->GetPositionZ());
+                _player->SetHealth(100);
+                auto transition = [&]
+                {
+                    if (writer == 0)
+                        _player->SetUnitMovementFlags(_player->GetUnitMovementFlags() | MOVEMENTFLAG_WALKING);
+                    else if (writer == 1)
+                        _player->SetUnitMovementFlags(_player->GetUnitMovementFlags() | MOVEMENTFLAG_SWIMMING);
+                    else if (writer == 2)
+                        _player->SetUnitMovementFlags(_player->GetUnitMovementFlags() | MOVEMENTFLAG_FALLING);
+                    else if (writer == 3)
+                        _player->AddUnitMovementFlag(MOVEMENTFLAG_FALLING);
+                    else
+                        _player->SetFallInformation(555, 60);
+
+                    bool retainedOwned = claim == 1 && (writer == 0 || writer == 2);
+                    bool foreign = writer == 3 || (writer == 2 && claim != 1);
+                    EXPECT_EQ(_player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING), retainedOwned || foreign);
+                    if (writer == 4)
+                        EXPECT_TRUE(_player->IsFalling());
+                    if (claim == 1)
+                        EXPECT_EQ(Status().Result, retainedOwned ? OwnedFallResult::Active : OwnedFallResult::Revoked);
+                    if (writer == 0)
+                        EXPECT_TRUE(_player->HasUnitMovementFlag(MOVEMENTFLAG_WALKING));
+                    if (writer == 1)
+                        EXPECT_TRUE(_player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING));
+                    ++transitions;
+                };
+                if (claim == 0)
+                    transition();
+                else if (claim == 1)
+                {
+                    Begin();
+                    Tick(100);
+                    transition();
+                }
+                else
+                {
+                    auto token = _player->GetMotionMaster()->MoveFallOwned(81);
+                    ASSERT_TRUE(token);
+                    _token = *token;
+                    _player->OnEnvironmentalDamage = transition;
+                    Tick(_player->movespline->Duration());
+                    EXPECT_EQ(Status().Result, OwnedFallResult::Landed);
+                    EXPECT_TRUE(Status().LandingHandled);
+                    EXPECT_EQ(_player->IsFalling(), writer == 4);
+                }
+            }
+        }
+        EXPECT_EQ(transitions, 15u);
+    }
 }
