@@ -28,6 +28,8 @@
 #include "Log.h"
 #include "MoveSpline.h"
 #include "MoveSplineInit.h"
+#include "OwnedFallMovementGenerator.h"
+#include "Player.h"
 #include "PointMovementGenerator.h"
 #include "RandomMovementGenerator.h"
 #include "TargetedMovementGenerator.h"
@@ -744,6 +746,46 @@ void MotionMaster::MoveFall(uint32 id /*=0*/, bool addFlagForNPC)
     init.SetFall();
 
     Mutate(new EffectMovementGenerator(init, id), MOTION_SLOT_CONTROLLED);
+}
+
+std::optional<OwnedFallToken> MotionMaster::MoveFallOwned(uint32 id)
+{
+    if (!_owner->IsPlayer() || !_owner->IsInWorld() || !_owner->IsAlive() || !_owner->FindMap() ||
+        _owner->ToPlayer()->IsBeingTeleported() || _owner->ToPlayer()->IsFalling() ||
+        _owner->HasUnitFlag(UNIT_FLAG_DISABLE_MOVE) ||
+        _owner->HasUnitState(UNIT_STATE_NOT_MOVE | UNIT_STATE_IN_FLIGHT) ||
+        _owner->IsMovementPreventedByCasting() || _owner->GetTransport() || _owner->GetVehicle() ||
+        _owner->GetTransGUID() || _owner->movespline->onTransport || !_owner->movespline->Finalized() ||
+        Impl[MOTION_SLOT_CONTROLLED] || Impl[MOTION_SLOT_ACTIVE] || _owner->HasOwnedFall() ||
+        (!empty() && GetCurrentMovementGeneratorType() != IDLE_MOTION_TYPE) ||
+        _owner->HasUnitMovementFlag(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR | MOVEMENTFLAG_ROOT |
+            MOVEMENTFLAG_ONTRANSPORT | MOVEMENTFLAG_SWIMMING | MOVEMENTFLAG_FLYING | MOVEMENTFLAG_CAN_FLY |
+            MOVEMENTFLAG_DISABLE_GRAVITY | MOVEMENTFLAG_HOVER | MOVEMENTFLAG_WATERWALKING))
+        return std::nullopt;
+
+    float z = _owner->GetMapHeight(_owner->GetPositionX(), _owner->GetPositionY(),
+        _owner->GetPositionZ(), true, MAX_FALL_DISTANCE) + _owner->GetHoverHeight();
+    if (!std::isfinite(z) || z <= INVALID_HEIGHT || _owner->GetPositionZ() - z < 0.1f ||
+        !Acore::IsValidMapCoord(_owner->GetPositionX(), _owner->GetPositionY(), z))
+        return std::nullopt;
+
+    OwnedFallToken token = _owner->PrepareOwnedFall(id, {_owner->GetPositionX(), _owner->GetPositionY(), z});
+    Mutate(new OwnedFallMovementGenerator(token), MOTION_SLOT_CONTROLLED);
+    return token;
+}
+
+bool MotionMaster::CancelOwnedFall(OwnedFallToken token)
+{
+    auto status = _owner->GetOwnedFallStatus(token);
+    if (!status || (status->Result != OwnedFallResult::Pending && status->Result != OwnedFallResult::Active))
+        return false;
+
+    _owner->RetireOwnedFall(OwnedFallResult::Cancelled, true);
+    _owner->FailOwnedFall(token);
+    if (auto* generator = dynamic_cast<OwnedFallMovementGenerator*>(Impl[MOTION_SLOT_CONTROLLED]))
+        if (generator->GetToken() == token && !(_cleanFlag & MMCF_UPDATE))
+            DirectExpireSlot(MOTION_SLOT_CONTROLLED, true);
+    return true;
 }
 
 /**

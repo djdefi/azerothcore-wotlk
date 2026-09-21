@@ -2150,6 +2150,8 @@ void WorldObject::SetMap(Map* map)
         ABORT();
     }
 
+    if (Unit* unit = ToUnit())
+        unit->RevokeOwnedFall();
     m_currMap = map;
     m_mapId = map->GetId();
     m_InstanceId = map->GetInstanceId();
@@ -2162,6 +2164,8 @@ void WorldObject::ResetMap()
     ASSERT(m_currMap);
     ASSERT(!IsInWorld());
 
+    if (Unit* unit = ToUnit())
+        unit->RevokeOwnedFall();
     sScriptMgr->OnWorldObjectResetMap(this);
 
     m_currMap = nullptr;
@@ -2939,10 +2943,21 @@ void WorldObject::MovePositionToFirstCollision(Position& pos, float dist, float 
 void WorldObject::SetPhaseMask(uint32 newPhaseMask, bool update)
 {
     sScriptMgr->OnBeforeWorldObjectSetPhaseMask(this, m_phaseMask, newPhaseMask, m_useCombinedPhases, update);
+    if (newPhaseMask != m_phaseMask)
+        if (Unit* unit = ToUnit())
+            unit->RevokeOwnedFall();
     m_phaseMask = newPhaseMask;
 
     if (update && IsInWorld())
         UpdateObjectVisibility();
+}
+
+void WorldObject::SetTransport(Transport* transport)
+{
+    if (m_transport != transport)
+        if (Unit* unit = ToUnit())
+            unit->RevokeOwnedFall();
+    m_transport = transport;
 }
 
 void WorldObject::PlayDistanceSound(uint32 sound_id, Player* target /*= nullptr*/)

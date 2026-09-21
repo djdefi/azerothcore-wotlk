@@ -12967,6 +12967,9 @@ void Player::SetClientControl(Unit* target, bool allowMove, bool packetOnly /*= 
     if (target->HasUnitState(UNIT_STATE_FLEEING | UNIT_STATE_CONFUSED))
         allowMove = false;
 
+    if (!packetOnly)
+        target->RevokeOwnedFall();
+
     WorldPacket data(SMSG_CLIENT_CONTROL_UPDATE, target->GetPackGUID().size() + 1);
     data << target->GetPackGUID();
     data << uint8(allowMove ? 1 : 0);
@@ -13008,6 +13011,8 @@ void Player::SetClientControl(Unit* target, bool allowMove, bool packetOnly /*= 
 
 void Player::SetMover(Unit* target)
 {
+    m_mover->RevokeOwnedFall();
+    target->RevokeOwnedFall();
     if (this != target && target->m_movedByPlayer && target->m_movedByPlayer != target && target->m_movedByPlayer != this)
     {
         LOG_INFO("misc", "Player::SetMover (A1) - {}, {}, {}, {}, {}, {}, {}, {}", GetGUID().ToString(), GetMapId(), GetInstanceId(), FindMap()->GetId(), IsInWorld() ? 1 : 0, IsDuringRemoveFromWorld() ? 1 : 0, IsBeingTeleported() ? 1 : 0, isBeingLoaded() ? 1 : 0);
@@ -13983,6 +13988,13 @@ static constexpr float   MIN_FALL_DMG_DIST          = 13.48f;       // Minimum f
 
 static constexpr uint32  SPELL_GUST_OF_WIND         = 43621;
 static constexpr uint32  SPELL_DIVINE_PROTECTION    = 498;
+
+void Player::SetFallInformation(uint32 time, float z)
+{
+    OnFallInformationChanged();
+    m_lastFallTime = time;
+    m_lastFallZ = z;
+}
 
 void Player::HandleFall(MovementInfo const& movementInfo)
 {

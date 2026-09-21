@@ -694,6 +694,7 @@ private:
 
 void Unit::UpdateSplineMovement(uint32 t_diff)
 {
+    CheckOwnedFallBeforeUpdate();
     if (movespline->Finalized())
         return;
 
@@ -712,7 +713,7 @@ void Unit::UpdateSplineMovement(uint32 t_diff)
 
     if (arrived)
     {
-        DisableSpline();
+        DisableSpline(true);
 
         if (movespline->HasAnimation() && IsCreature() && IsAlive())
             SetAnimTier(AnimTier(movespline->GetAnimationType()));
@@ -722,6 +723,8 @@ void Unit::UpdateSplineMovement(uint32 t_diff)
     //m_movesplineTimer.Update(t_diff);
     //if (m_movesplineTimer.Passed() || arrived)
     UpdateSplinePosition();
+    if (arrived)
+        CompleteOwnedFall();
 }
 
 void Unit::UpdateSplinePosition()
@@ -755,6 +758,13 @@ void Unit::UpdateSplinePosition()
 
 void Unit::DisableSpline()
 {
+    DisableSpline(false);
+}
+
+void Unit::DisableSpline(bool naturalArrival)
+{
+    if (!naturalArrival)
+        RetireOwnedFall(OwnedFallResult::Cancelled, false);
     m_movementInfo.RemoveMovementFlag(MovementFlags(MOVEMENTFLAG_SPLINE_ENABLED | MOVEMENTFLAG_FORWARD | MOVEMENTFLAG_BACKWARD));
     movespline->_Interrupt();
 }
@@ -11385,6 +11395,8 @@ void Unit::SetSpeed(UnitMoveType mtype, float rate, bool forced)
 
 void Unit::setDeathState(DeathState s, bool despawn)
 {
+    if (s != DeathState::Alive && s != DeathState::JustRespawned)
+        RevokeOwnedFall();
     // death state needs to be updated before RemoveAllAurasOnDeath() calls HandleChannelDeathItem(..) so that
     // it can be used to check creation of death items (such as soul shards).
     m_deathState = s;
@@ -12569,6 +12581,7 @@ void Unit::AddToWorld()
 
 void Unit::RemoveFromWorld()
 {
+    RevokeOwnedFall();
     // cleanup
     ASSERT(GetGUID());
 
@@ -15425,6 +15438,7 @@ void Unit::KnockbackFrom(float x, float y, float speedXY, float speedZ)
     }
     else
     {
+        RevokeOwnedFall();
         float vcos, vsin;
         GetSinCos(x, y, vsin, vcos);
 
@@ -15693,6 +15707,7 @@ void Unit::_EnterVehicle(Vehicle* vehicle, int8 seatId, AuraApplication const* a
     }
 
     ASSERT(!m_vehicle);
+    RevokeOwnedFall();
     m_vehicle = vehicle;
 
     if (!m_vehicle->AddPassenger(this, seatId))
@@ -15778,6 +15793,7 @@ void Unit::_ExitVehicle(Position const* exitPosition)
 
     Vehicle* vehicle = m_vehicle;
     Unit* vehicleBase = m_vehicle->GetBase();
+    RevokeOwnedFall();
     m_vehicle = nullptr;
 
     if (!vehicleBase)
@@ -16030,6 +16046,8 @@ bool Unit::UpdatePosition(float x, float y, float z, float orientation, bool tel
     if (!Acore::IsValidMapCoord(x, y, z, orientation))
         return false;
 
+    if (teleport)
+        RevokeOwnedFall();
     float old_orientation = GetOrientation();
     float current_z = GetPositionZ();
     bool turn = (old_orientation != orientation);
@@ -16528,6 +16546,8 @@ bool Unit::SetWalk(bool enable)
 
 void Unit::SetDisableGravity(bool enable)
 {
+    if (enable)
+        RevokeOwnedFall();
     bool isClientControlled = IsClientControlled();
 
     if (!isClientControlled)
@@ -16563,6 +16583,8 @@ void Unit::SetDisableGravity(bool enable)
 
 bool Unit::SetSwim(bool enable)
 {
+    if (enable)
+        RevokeOwnedFall();
     if (enable == HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING))
         return false;
 
@@ -16588,6 +16610,8 @@ bool Unit::SetSwim(bool enable)
  */
 void Unit::SetCanFly(bool enable)
 {
+    if (enable)
+        RevokeOwnedFall();
     bool isClientControlled = IsClientControlled();
 
     if (!isClientControlled)
@@ -16665,6 +16689,8 @@ void Unit::SetFeatherFall(bool enable)
 
 void Unit::SetHover(bool enable)
 {
+    if (enable)
+        RevokeOwnedFall();
     bool isClientControlled = IsClientControlled();
 
     if (!isClientControlled)
@@ -16718,6 +16744,8 @@ void Unit::SetHover(bool enable)
 
 void Unit::SetWaterWalking(bool enable)
 {
+    if (enable)
+        RevokeOwnedFall();
     bool isClientControlled = IsClientControlled();
 
     if (!isClientControlled)
