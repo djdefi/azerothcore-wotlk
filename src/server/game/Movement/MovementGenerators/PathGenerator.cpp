@@ -24,6 +24,25 @@
 #include "Map.h"
 #include "Metric.h"
 
+namespace
+{
+    bool RecordPathCheck(PathQueryDiagnostics::Check* check, bool value)
+    {
+        if (check)
+            *check = value ? PathQueryDiagnostics::Check::Yes : PathQueryDiagnostics::Check::No;
+        return value;
+    }
+
+    void RecordPathCorridor(PathQueryDiagnostics* diagnostics, dtPolyRef const* polys, uint32 count)
+    {
+        if (!diagnostics)
+            return;
+
+        diagnostics->CorridorStage.PolyCount = count;
+        diagnostics->CorridorStage.LastPoly = count && count <= MAX_PATH_LENGTH ? polys[count - 1] : INVALID_POLYREF;
+    }
+}
+
  ////////////////// PathGenerator //////////////////
 PathGenerator::PathGenerator(WorldObject const* owner) :
     _polyLength(0), _type(PATHFIND_BLANK), _useStraightPath(false), _forceDestination(false),
@@ -56,8 +75,59 @@ bool PathGenerator::CalculatePath(float destX, float destY, float destZ, bool fo
 
 bool PathGenerator::CalculatePath(float x, float y, float z, float destX, float destY, float destZ, bool forceDest)
 {
-    if (!Acore::IsValidMapCoord(destX, destY, destZ) || !Acore::IsValidMapCoord(x, y, z))
+    return CalculatePathImpl(x, y, z, destX, destY, destZ, forceDest, true, nullptr);
+}
+
+bool PathGenerator::CalculatePath(float destX, float destY, float destZ, bool forceDest,
+    PathQueryDiagnostics& diagnostics)
+{
+    float x, y, z;
+    _source->GetPosition(x, y, z);
+    return CalculatePathImpl(x, y, z, destX, destY, destZ, forceDest, false, &diagnostics);
+}
+
+bool PathGenerator::CalculatePath(float x, float y, float z, float destX, float destY, float destZ,
+    bool forceDest, PathQueryDiagnostics& diagnostics)
+{
+    return CalculatePathImpl(x, y, z, destX, destY, destZ, forceDest, true, &diagnostics);
+}
+
+bool PathGenerator::CalculatePathImpl(float x, float y, float z, float destX, float destY, float destZ,
+    bool forceDest, bool explicitStart, PathQueryDiagnostics* diagnostics)
+{
+    if (diagnostics)
+    {
+        *diagnostics = {};
+        diagnostics->Start = {x, y, z};
+        diagnostics->End = {destX, destY, destZ};
+        diagnostics->MapId = _source->GetMapId();
+        diagnostics->InstanceId = _source->GetInstanceId();
+        diagnostics->PhaseMask = _source->GetPhaseMask();
+        diagnostics->ExplicitStart = explicitStart;
+        diagnostics->ForceDestination = forceDest;
+        diagnostics->UseRaycast = _useRaycast;
+        diagnostics->UseStraightPath = _useStraightPath;
+        diagnostics->SlopeCheck = _slopeCheck;
+        diagnostics->PointLimit = _pointPathLimit;
+        diagnostics->EntryIncludeFlags = _filter.getIncludeFlags();
+        diagnostics->EntryExcludeFlags = _filter.getExcludeFlags();
+    }
+
+    if (!RecordPathCheck(diagnostics ? &diagnostics->CoordinatesValid : nullptr,
+        Acore::IsValidMapCoord(destX, destY, destZ) && Acore::IsValidMapCoord(x, y, z)))
         return false;
+
+    auto finish = [&]()
+    {
+        if (diagnostics)
+        {
+            diagnostics->ResultUpdated = true;
+            diagnostics->ResultType = _type;
+            diagnostics->ActualEnd = _actualEndPosition;
+            diagnostics->ResultPointCount = _pathPoints.size();
+        }
+        return true;
+    };
 
     METRIC_DETAILED_EVENT("mmap_events", "CalculatePath", "");
 
@@ -72,18 +142,30 @@ bool PathGenerator::CalculatePath(float x, float y, float z, float destX, float 
     // make sure navMesh works - we can run on map w/o mmap
     // check if the start and end point have a .mmtile loaded (can we pass via not loaded tile on the way?)
     Unit const* _sourceUnit = _source->ToUnit();
-    if (!_navMesh || !_navMeshQuery || (_sourceUnit && _sourceUnit->HasUnitState(UNIT_STATE_IGNORE_PATHFINDING)) ||
-        !HaveTile(start) || !HaveTile(dest))
+    if (!RecordPathCheck(diagnostics ? &diagnostics->HasNavMesh : nullptr, _navMesh != nullptr) ||
+        !RecordPathCheck(diagnostics ? &diagnostics->HasNavMeshQuery : nullptr, _navMeshQuery != nullptr) ||
+        (_sourceUnit && RecordPathCheck(diagnostics ? &diagnostics->IgnorePathfinding : nullptr,
+            _sourceUnit->HasUnitState(UNIT_STATE_IGNORE_PATHFINDING))) ||
+        !HaveTile(start, diagnostics ? &diagnostics->StartTile : nullptr) ||
+        !HaveTile(dest, diagnostics ? &diagnostics->EndTile : nullptr))
     {
+        if (diagnostics)
+            diagnostics->ShortcutReason = PathQueryDiagnostics::Shortcut::Prerequisite;
         BuildShortcut();
         _type = PathType(PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH);
-        return true;
+        return finish();
     }
 
     UpdateFilter();
+    if (diagnostics)
+    {
+        diagnostics->FilterUpdated = true;
+        diagnostics->UsedIncludeFlags = _filter.getIncludeFlags();
+        diagnostics->UsedExcludeFlags = _filter.getExcludeFlags();
+    }
 
-    BuildPolyPath(start, dest);
-    return true;
+    BuildPolyPath(start, dest, diagnostics);
+    return finish();
 }
 
 dtPolyRef PathGenerator::GetPathPolyByPosition(dtPolyRef const* polyPath, uint32 polyPathSize, float const* point, float* distance) const
@@ -121,24 +203,41 @@ dtPolyRef PathGenerator::GetPathPolyByPosition(dtPolyRef const* polyPath, uint32
     return (minDist < 3.0f) ? nearestPoly : INVALID_POLYREF;
 }
 
-dtPolyRef PathGenerator::GetPolyByLocation(float const* point, float* distance) const
+dtPolyRef PathGenerator::GetPolyByLocation(float const* point, float* distance,
+    PathQueryDiagnostics::Polygon* diagnostics) const
 {
+    if (diagnostics)
+        diagnostics->CachedPolyCount = _polyLength;
+    auto finish = [&](dtPolyRef ref, PathQueryDiagnostics::Lookup source)
+    {
+        if (diagnostics)
+        {
+            diagnostics->Ref = ref;
+            diagnostics->Distance = *distance;
+            diagnostics->Source = source;
+        }
+        return ref;
+    };
     // first we check the current path
     // if the current path doesn't contain the current poly,
     // we need to use the expensive navMesh.findNearestPoly
     dtPolyRef polyRef = GetPathPolyByPosition(_pathPolyRefs, _polyLength, point, distance);
     if (polyRef != INVALID_POLYREF)
-        return polyRef;
+        return finish(polyRef, PathQueryDiagnostics::Lookup::CachedCorridor);
 
     // we don't have it in our old path
     // try to get it by findNearestPoly()
     // first try with low search box
     float extents[VERTEX_SIZE] = { 3.0f, 5.0f, 3.0f };    // bounds of poly search area
     float closestPoint[VERTEX_SIZE] = { 0.0f, 0.0f, 0.0f };
-    if (dtStatusSucceed(_navMeshQuery->findNearestPoly(point, extents, &_filter, &polyRef, closestPoint)) && polyRef != INVALID_POLYREF)
+    dtStatus status = _navMeshQuery->findNearestPoly(point, extents, &_filter, &polyRef, closestPoint);
+    if (diagnostics)
+        diagnostics->SmallStatus = status;
+    if (RecordPathCheck(diagnostics ? &diagnostics->SmallSearchSucceeded : nullptr, dtStatusSucceed(status)) &&
+        polyRef != INVALID_POLYREF)
     {
         *distance = dtVdist(closestPoint, point);
-        return polyRef;
+        return finish(polyRef, PathQueryDiagnostics::Lookup::SmallExtent);
     }
 
     // still nothing ..
@@ -146,17 +245,22 @@ dtPolyRef PathGenerator::GetPolyByLocation(float const* point, float* distance) 
     // Note that the extent should not overlap more than 128 polygons in the navmesh (see dtNavMeshQuery::findNearestPoly)
     extents[1] = 50.0f;
 
-    if (dtStatusSucceed(_navMeshQuery->findNearestPoly(point, extents, &_filter, &polyRef, closestPoint)) && polyRef != INVALID_POLYREF)
+    status = _navMeshQuery->findNearestPoly(point, extents, &_filter, &polyRef, closestPoint);
+    if (diagnostics)
+        diagnostics->TallStatus = status;
+    if (RecordPathCheck(diagnostics ? &diagnostics->TallSearchSucceeded : nullptr, dtStatusSucceed(status)) &&
+        polyRef != INVALID_POLYREF)
     {
         *distance = dtVdist(closestPoint, point);
-        return polyRef;
+        return finish(polyRef, PathQueryDiagnostics::Lookup::TallExtent);
     }
 
     *distance = FLT_MAX;
-    return INVALID_POLYREF;
+    return finish(INVALID_POLYREF, PathQueryDiagnostics::Lookup::NotFound);
 }
 
-void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 const& endPos)
+void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 const& endPos,
+    PathQueryDiagnostics* diagnostics)
 {
     // *** getting start/end poly logic ***
 
@@ -164,8 +268,10 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
     float startPoint[VERTEX_SIZE] = { startPos.y, startPos.z, startPos.x };
     float endPoint[VERTEX_SIZE] = { endPos.y, endPos.z, endPos.x };
 
-    dtPolyRef startPoly = GetPolyByLocation(startPoint, &distToStartPoly);
-    dtPolyRef endPoly = GetPolyByLocation(endPoint, &distToEndPoly);
+    dtPolyRef startPoly = GetPolyByLocation(startPoint, &distToStartPoly,
+        diagnostics ? &diagnostics->StartPolygon : nullptr);
+    dtPolyRef endPoly = GetPolyByLocation(endPoint, &distToEndPoly,
+        diagnostics ? &diagnostics->EndPolygon : nullptr);
 
     _type = PathType(PATHFIND_NORMAL);
 
@@ -183,6 +289,8 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
         bool waterPath = IsWaterPath(_pathPoints);
         if (path || (waterPath && canSwim))
         {
+            if (diagnostics)
+                diagnostics->ShortcutReason = PathQueryDiagnostics::Shortcut::MissingPolygon;
             _type = PathType(PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH);
             return;
         }
@@ -196,8 +304,8 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
     }
 
     // we may need a better number here
-    bool startFarFromPoly = distToStartPoly > 7.0f;
-    bool endFarFromPoly = distToEndPoly > 7.0f;
+    bool startFarFromPoly = RecordPathCheck(diagnostics ? &diagnostics->StartFar : nullptr, distToStartPoly > 7.0f);
+    bool endFarFromPoly = RecordPathCheck(diagnostics ? &diagnostics->EndFar : nullptr, distToEndPoly > 7.0f);
 
     // create a shortcut if the path begins or end too far
     // away from the desired path points.
@@ -230,6 +338,8 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
 
         if (buildShortcut)
         {
+            if (diagnostics)
+                diagnostics->ShortcutReason = PathQueryDiagnostics::Shortcut::FarFromPolygon;
             BuildShortcut();
             _type = PathType(PATHFIND_NORMAL | PATHFIND_NOT_USING_PATH);
 
@@ -259,6 +369,11 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
     // handle this case as if they were 2 different polygons, building a line path split in some few points
     if (startPoly == endPoly && !_useRaycast)
     {
+        if (diagnostics)
+        {
+            diagnostics->CorridorStage.Mode = PathQueryDiagnostics::CorridorMode::SamePolygon;
+            diagnostics->CorridorStage.ReachesEndPolygon = PathQueryDiagnostics::Check::Yes;
+        }
         _pathPolyRefs[0] = startPoly;
         _polyLength = 1;
 
@@ -271,7 +386,8 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
         else
             _type = PATHFIND_NORMAL;
 
-        BuildPointPath(startPoint, endPoint);
+        RecordPathCorridor(diagnostics, _pathPolyRefs, _polyLength);
+        BuildPointPath(startPoint, endPoint, diagnostics);
         return;
     }
 
@@ -311,6 +427,8 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
 
     if (startPolyFound && endPolyFound)
     {
+        if (diagnostics)
+            diagnostics->CorridorStage.Mode = PathQueryDiagnostics::CorridorMode::Reused;
         // we moved along the path and the target did not move out of our old poly-path
         // our path is a simple subpath case, we have all the data we need
         // just "cut" it out
@@ -320,6 +438,8 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
     }
     else if (startPolyFound && !endPolyFound)
     {
+        if (diagnostics)
+            diagnostics->CorridorStage.Mode = PathQueryDiagnostics::CorridorMode::Extended;
         // we are moving on the old path but target moved out
         // so we have atleast part of poly-path ready
 
@@ -377,6 +497,12 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
                 MAX_PATH_LENGTH - prefixPolyLength); // max number of polygons in output path
         }
 
+        if (diagnostics)
+        {
+            diagnostics->CorridorStage.StatusAvailable = true;
+            diagnostics->CorridorStage.Status = dtResult;
+            diagnostics->CorridorStage.QueryPolyCount = suffixPolyLength;
+        }
         if (!suffixPolyLength || dtStatusFailed(dtResult))
         {
             // this is probably an error state, but we'll leave it
@@ -400,6 +526,8 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
         dtStatus dtResult;
         if (_useRaycast)
         {
+            if (diagnostics)
+                diagnostics->CorridorStage.Mode = PathQueryDiagnostics::CorridorMode::Raycast;
             float hit = 0;
             float hitNormal[3];
             memset(hitNormal, 0, sizeof(hitNormal));
@@ -415,6 +543,14 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
                 (int*)&_polyLength,
                 MAX_PATH_LENGTH);
 
+            RecordPathCorridor(diagnostics, _pathPolyRefs, _polyLength);
+            if (diagnostics)
+            {
+                diagnostics->CorridorStage.StatusAvailable = true;
+                diagnostics->CorridorStage.Status = dtResult;
+                diagnostics->CorridorStage.QueryPolyCount = _polyLength;
+                diagnostics->CorridorStage.RaycastHit = hit;
+            }
             if (!_polyLength || dtStatusFailed(dtResult))
             {
                 BuildShortcut();
@@ -424,7 +560,7 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
             }
 
             // raycast() sets hit to FLT_MAX if there is a ray between start and end
-            if (hit != FLT_MAX)
+            if (!RecordPathCheck(diagnostics ? &diagnostics->CorridorStage.RaycastClear : nullptr, hit == FLT_MAX))
             {
                 float hitPos[3];
 
@@ -440,6 +576,11 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
                 _pathPoints[0] = GetStartPosition();
                 _pathPoints[1] = G3D::Vector3(hitPos[2], hitPos[0], hitPos[1]);
 
+                if (diagnostics)
+                {
+                    diagnostics->PointStage.Mode = PathQueryDiagnostics::PointMode::Raycast;
+                    diagnostics->PointStage.Count = 2;
+                }
                 NormalizePath();
                 _type = PATHFIND_INCOMPLETE;
                 AddFarFromPolyFlags(startFarFromPoly, false);
@@ -455,6 +596,11 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
                 _pathPoints[0] = GetStartPosition();
                 _pathPoints[1] = G3D::Vector3(endPoint[2], endPoint[0], endPoint[1]);
 
+                if (diagnostics)
+                {
+                    diagnostics->PointStage.Mode = PathQueryDiagnostics::PointMode::Raycast;
+                    diagnostics->PointStage.Count = 2;
+                }
                 NormalizePath();
                 if (startFarFromPoly || endFarFromPoly)
                 {
@@ -469,6 +615,8 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
         }
         else
         {
+            if (diagnostics)
+                diagnostics->CorridorStage.Mode = PathQueryDiagnostics::CorridorMode::FindPath;
             dtResult = _navMeshQuery->findPath(
                 startPoly,          // start polygon
                 endPoly,            // end polygon
@@ -480,6 +628,13 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
                 MAX_PATH_LENGTH);   // max number of polygons in output path
         }
 
+        RecordPathCorridor(diagnostics, _pathPolyRefs, _polyLength);
+        if (diagnostics)
+        {
+            diagnostics->CorridorStage.StatusAvailable = true;
+            diagnostics->CorridorStage.Status = dtResult;
+            diagnostics->CorridorStage.QueryPolyCount = _polyLength;
+        }
         if (!_polyLength || dtStatusFailed(dtResult))
         {
             // only happens if we passed bad data to findPath(), or navmesh is messed up
@@ -490,6 +645,7 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
         }
     }
 
+    RecordPathCorridor(diagnostics, _pathPolyRefs, _polyLength);
     if (!_polyLength)
     {
         LOG_ERROR("movement", "PathGenerator::BuildPolyPath: {} Path Build failed: 0 length path", _source->GetGUID().ToString());
@@ -499,7 +655,8 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
     }
 
     // by now we know what type of path we can get
-    if (_pathPolyRefs[_polyLength - 1] == endPoly && !(_type & PATHFIND_INCOMPLETE))
+    if (RecordPathCheck(diagnostics ? &diagnostics->CorridorStage.ReachesEndPolygon : nullptr,
+        _pathPolyRefs[_polyLength - 1] == endPoly) && !(_type & PATHFIND_INCOMPLETE))
     {
         _type = PATHFIND_NORMAL;
     }
@@ -511,10 +668,10 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
     AddFarFromPolyFlags(startFarFromPoly, endFarFromPoly);
 
     // generate the point-path out of our up-to-date poly-path
-    BuildPointPath(startPoint, endPoint);
+    BuildPointPath(startPoint, endPoint, diagnostics);
 }
 
-void PathGenerator::BuildPointPath(const float* startPoint, const float* endPoint)
+void PathGenerator::BuildPointPath(const float* startPoint, const float* endPoint, PathQueryDiagnostics* diagnostics)
 {
     float pathPoints[MAX_POINT_PATH_LENGTH * VERTEX_SIZE];
     uint32 pointCount = 0;
@@ -529,6 +686,8 @@ void PathGenerator::BuildPointPath(const float* startPoint, const float* endPoin
     }
     else if (_useStraightPath)
     {
+        if (diagnostics)
+            diagnostics->PointStage.Mode = PathQueryDiagnostics::PointMode::Straight;
         dtResult = _navMeshQuery->findStraightPath(
             startPoint,         // start position
             endPoint,           // end position
@@ -542,6 +701,8 @@ void PathGenerator::BuildPointPath(const float* startPoint, const float* endPoin
     }
     else
     {
+        if (diagnostics)
+            diagnostics->PointStage.Mode = PathQueryDiagnostics::PointMode::Smooth;
         dtResult = FindSmoothPath(
             startPoint,         // start position
             endPoint,           // end position
@@ -552,6 +713,12 @@ void PathGenerator::BuildPointPath(const float* startPoint, const float* endPoin
             _pointPathLimit);    // maximum number of points
     }
 
+    if (diagnostics)
+    {
+        diagnostics->PointStage.StatusAvailable = true;
+        diagnostics->PointStage.Status = dtResult;
+        diagnostics->PointStage.Count = pointCount;
+    }
     // A successful partial query may have no progress beyond its one reachable point.
     bool const partialNoProgress = pointCount == 1 && dtStatusSucceed(dtResult) && (_type & PATHFIND_INCOMPLETE);
 
@@ -566,7 +733,8 @@ void PathGenerator::BuildPointPath(const float* startPoint, const float* endPoin
     else if ((pointCount < 2 && !partialNoProgress) || dtStatusFailed(dtResult))
     {
         // If its too steep, just return incomplete path.
-        if (pointCount > 0 && dtResult & DT_SLOPE_TOO_STEEP)
+        if (pointCount > 0 && RecordPathCheck(diagnostics ? &diagnostics->PointStage.SlopeLimited : nullptr,
+            (dtResult & DT_SLOPE_TOO_STEEP) != 0))
         {
             _pathPoints.resize(pointCount);
             for (uint32 i = 0; i < pointCount; ++i)
@@ -588,7 +756,8 @@ void PathGenerator::BuildPointPath(const float* startPoint, const float* endPoin
         _type = PathType(_type | PATHFIND_NOPATH);
         return;
     }
-    else if (pointCount >= _pointPathLimit && !partialNoProgress)
+    else if (RecordPathCheck(diagnostics ? &diagnostics->PointStage.LimitReached : nullptr,
+        pointCount >= _pointPathLimit) && !partialNoProgress)
     {
         BuildShortcut();
         _type = PathType(_type | PATHFIND_SHORT);
@@ -608,6 +777,8 @@ void PathGenerator::BuildPointPath(const float* startPoint, const float* endPoin
     if (_forceDestination &&
         (!(_type & PATHFIND_NORMAL) || !InRange(GetEndPosition(), GetActualEndPosition(), 1.0f, 1.0f)))
     {
+        if (diagnostics)
+            diagnostics->ShortcutReason = PathQueryDiagnostics::Shortcut::ForcedDestination;
         // we may want to keep partial subpath
         if (Dist3DSqr(GetActualEndPosition(), GetEndPosition()) < 0.3f * Dist3DSqr(GetStartPosition(), GetEndPosition()))
         {
@@ -716,20 +887,25 @@ NavTerrain PathGenerator::GetNavTerrain(float x, float y, float z) const
     }
 }
 
-bool PathGenerator::HaveTile(const G3D::Vector3& p) const
+bool PathGenerator::HaveTile(const G3D::Vector3& p, PathQueryDiagnostics::Tile* diagnostics) const
 {
     int tx = -1, ty = -1;
     float point[VERTEX_SIZE] = { p.y, p.z, p.x };
 
     _navMesh->calcTileLoc(point, &tx, &ty);
+    if (diagnostics)
+    {
+        diagnostics->X = tx;
+        diagnostics->Y = ty;
+    }
 
     /// Workaround
     /// For some reason, often the tx and ty variables wont get a valid value
     /// Use this check to prevent getting negative tile coords and crashing on getTileAt
     if (tx < 0 || ty < 0)
-        return false;
+        return RecordPathCheck(diagnostics ? &diagnostics->Present : nullptr, false);
 
-    return (_navMesh->getTileAt(tx, ty, 0) != nullptr);
+    return RecordPathCheck(diagnostics ? &diagnostics->Present : nullptr, _navMesh->getTileAt(tx, ty, 0) != nullptr);
 }
 
 uint32 PathGenerator::FixupCorridor(dtPolyRef* path, uint32 npath, uint32 maxPath, dtPolyRef const* visited, uint32 nvisited)

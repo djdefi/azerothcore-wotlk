@@ -55,6 +55,112 @@ enum PathType
     PATHFIND_FARFROMPOLY       = PATHFIND_FARFROMPOLY_START | PATHFIND_FARFROMPOLY_END, // start or end positions are far from the mmap poligon
 };
 
+// Optional caller-owned evidence from one original calculation, not a replay or a path-safety certificate.
+struct PathQueryDiagnostics
+{
+    enum class Check : uint8
+    {
+        NotEvaluated, No, Yes
+    };
+    enum class Lookup : uint8
+    {
+        NotEvaluated, CachedCorridor, SmallExtent, TallExtent, NotFound
+    };
+    enum class Shortcut : uint8
+    {
+        None, Prerequisite, MissingPolygon, FarFromPolygon, ForcedDestination
+    };
+    enum class CorridorMode : uint8
+    {
+        NotEvaluated, SamePolygon, Reused, Extended, FindPath, Raycast
+    };
+    enum class PointMode : uint8
+    {
+        NotEvaluated, Smooth, Straight, Raycast
+    };
+
+    struct Tile
+    {
+        Check Present = Check::NotEvaluated;
+        int X = -1;
+        int Y = -1;
+    };
+
+    struct Polygon
+    {
+        Lookup Source = Lookup::NotEvaluated;
+        dtPolyRef Ref = INVALID_POLYREF;
+        // Valid only after a lookup; FLT_MAX with NotFound is the existing missing-polygon sentinel.
+        float Distance = 0.0f;
+        uint32 CachedPolyCount = 0;
+        Check SmallSearchSucceeded = Check::NotEvaluated;
+        Check TallSearchSucceeded = Check::NotEvaluated;
+        dtStatus SmallStatus = 0;
+        dtStatus TallStatus = 0;
+    };
+
+    struct Corridor
+    {
+        CorridorMode Mode = CorridorMode::NotEvaluated;
+        bool StatusAvailable = false;
+        dtStatus Status = 0;
+        // Counts/last ref are captured before any subsequent shortcut clears the corridor.
+        uint32 QueryPolyCount = 0;
+        uint32 PolyCount = 0;
+        dtPolyRef LastPoly = INVALID_POLYREF;
+        Check ReachesEndPolygon = Check::NotEvaluated;
+        Check RaycastClear = Check::NotEvaluated;
+        float RaycastHit = 0.0f;
+    };
+
+    struct Points
+    {
+        PointMode Mode = PointMode::NotEvaluated;
+        bool StatusAvailable = false;
+        dtStatus Status = 0;
+        // Producer count, before close-target append, normalization or fallback; see ResultPointCount.
+        uint32 Count = 0;
+        Check SlopeLimited = Check::NotEvaluated;
+        Check LimitReached = Check::NotEvaluated;
+    };
+
+    G3D::Vector3 Start{0.0f, 0.0f, 0.0f};
+    G3D::Vector3 End{0.0f, 0.0f, 0.0f};
+    uint32 MapId = 0;
+    uint32 InstanceId = 0;
+    uint32 PhaseMask = 0;
+    bool ExplicitStart = false;
+    bool ForceDestination = false;
+    bool UseRaycast = false;
+    bool UseStraightPath = false;
+    bool SlopeCheck = false;
+    uint32 PointLimit = 0;
+    uint16 EntryIncludeFlags = 0;
+    uint16 EntryExcludeFlags = 0;
+    bool FilterUpdated = false;
+    uint16 UsedIncludeFlags = 0;
+    uint16 UsedExcludeFlags = 0;
+    Check CoordinatesValid = Check::NotEvaluated;
+    Check HasNavMesh = Check::NotEvaluated;
+    Check HasNavMeshQuery = Check::NotEvaluated;
+    Check IgnorePathfinding = Check::NotEvaluated;
+    Tile StartTile;
+    Tile EndTile;
+    Polygon StartPolygon;
+    Polygon EndPolygon;
+    Check StartFar = Check::NotEvaluated;
+    Check EndFar = Check::NotEvaluated;
+    Corridor CorridorStage;
+    Points PointStage;
+    // Identifies the producer of NORMAL|NOT_USING_PATH, not the inferred reason for every partial/failure.
+    Shortcut ShortcutReason = Shortcut::None;
+    // False for invalid-coordinate attempts: the generator's previous path/type are deliberately left unchanged.
+    bool ResultUpdated = false;
+    PathType ResultType = PATHFIND_BLANK;
+    G3D::Vector3 ActualEnd{0.0f, 0.0f, 0.0f};
+    uint32 ResultPointCount = 0;
+};
+
 class PathGenerator
 {
     public:
@@ -65,6 +171,12 @@ class PathGenerator
         // return: true if new path was calculated, false otherwise (no change needed)
         bool CalculatePath(float destX, float destY, float destZ, bool forceDest = false);
         bool CalculatePath(float x, float y, float z, float destX, float destY, float destZ, bool forceDest);
+        // Reset and populate only this caller-owned sink during the synchronous original query.
+        // Raw Start/End precede normalization. NotEvaluated preserves short-circuiting; no extra probes are run.
+        // Status fields require their availability marker; no sink is retained and existing overloads are unchanged.
+        bool CalculatePath(float destX, float destY, float destZ, bool forceDest, PathQueryDiagnostics& diagnostics);
+        bool CalculatePath(float x, float y, float z, float destX, float destY, float destZ, bool forceDest,
+            PathQueryDiagnostics& diagnostics);
         [[nodiscard]] bool IsInvalidDestinationZ(Unit const* target) const;
         [[nodiscard]] bool IsWalkableClimb(float const* v1, float const* v2) const;
         [[nodiscard]] bool IsWalkableClimb(float x, float y, float z, float destX, float destY, float destZ) const;
@@ -128,6 +240,8 @@ class PathGenerator
         }
 
     private:
+        bool CalculatePathImpl(float x, float y, float z, float destX, float destY, float destZ, bool forceDest,
+            bool explicitStart, PathQueryDiagnostics* diagnostics);
         dtPolyRef _pathPolyRefs[MAX_PATH_LENGTH];   // array of detour polygon references
         uint32 _polyLength;                         // number of polygons in the path
 
@@ -160,11 +274,13 @@ class PathGenerator
         bool InRangeYZX(float const* v1, float const* v2, float r, float h) const;
 
         dtPolyRef GetPathPolyByPosition(dtPolyRef const* polyPath, uint32 polyPathSize, float const* Point, float* Distance = nullptr) const;
-        dtPolyRef GetPolyByLocation(float const* Point, float* Distance) const;
-        [[nodiscard]] bool HaveTile(G3D::Vector3 const& p) const;
+        dtPolyRef GetPolyByLocation(float const* Point, float* Distance,
+            PathQueryDiagnostics::Polygon* diagnostics) const;
+        [[nodiscard]] bool HaveTile(G3D::Vector3 const& p, PathQueryDiagnostics::Tile* diagnostics) const;
 
-        void BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 const& endPos);
-        void BuildPointPath(float const* startPoint, float const* endPoint);
+        void BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 const& endPos,
+            PathQueryDiagnostics* diagnostics);
+        void BuildPointPath(float const* startPoint, float const* endPoint, PathQueryDiagnostics* diagnostics);
         void BuildShortcut();
 
         [[nodiscard]] NavTerrain GetNavTerrain(float x, float y, float z) const;
