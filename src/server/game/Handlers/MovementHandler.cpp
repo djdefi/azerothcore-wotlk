@@ -413,6 +413,7 @@ void WorldSession::HandleMoverRelocation(MovementInfo& movementInfo, Unit* mover
 {
     SynchronizeMovement(movementInfo);
 
+    mover->RevokeOwnedFall();
     mover->UpdatePosition(movementInfo.pos);
     mover->m_movementInfo = movementInfo;
 
@@ -797,6 +798,7 @@ void WorldSession::HandleMoveNotActiveMover(WorldPacket& recvData)
     mi.guid = old_mover_guid;
     ReadMovementInfo(recvData, &mi);
 
+    _player->m_mover->RevokeOwnedFall();
     _player->m_mover->m_movementInfo = mi;
 }
 
@@ -830,6 +832,7 @@ void WorldSession::HandleMoveKnockBackAck(WorldPacket& recvData)
     movementInfo.guid = guid;
     ReadMovementInfo(recvData, &movementInfo);
 
+    mover->RevokeOwnedFall();
     mover->m_movementInfo = movementInfo;
 
     if (mover->IsPlayer() && static_cast<Player*>(mover)->IsFreeFlying())

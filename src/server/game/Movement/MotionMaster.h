@@ -20,6 +20,7 @@
 
 #include "Common.h"
 #include "ObjectGuid.h"
+#include "OwnedFall.h"
 #include "PathGenerator.h"
 #include "Position.h"
 #include "SharedDefines.h"
@@ -275,6 +276,16 @@ public:
     { MoveJump(pos.m_positionX, pos.m_positionY, pos.m_positionZ, speedXY, speedZ, id); };
     void MoveJump(float x, float y, float z, float speedXY, float speedZ, uint32 id = 0, Unit const* target = nullptr);
     void MoveFall(uint32 id = 0, bool addFlagForNPC = false);
+    /**
+     * Opt-in Player fall with core-owned flag/landing lifecycle. Requires an idle, unblocked, world-frame
+     * living Player without pre-existing falling state or a controlled generator. No legacy MoveFall change.
+     * A returned token means accepted; inspect GetOwnedFallStatus for launch/failure/terminal state.
+     * Natural completion handles Player landing and resets only owned state before queued movement starts.
+     * Callers must not duplicate HandleFall/flag/bookkeeping cleanup. Tokens are valid only for this Unit.
+     */
+    [[nodiscard]] std::optional<OwnedFallToken> MoveFallOwned(uint32 id = 0);
+    // Exact-token cancellation only; does not stop a replacement spline or claim arrival.
+    bool CancelOwnedFall(OwnedFallToken token);
 
     void MoveSeekAssistance(float x, float y, float z);
     void MoveSeekAssistanceDistract(uint32 timer);

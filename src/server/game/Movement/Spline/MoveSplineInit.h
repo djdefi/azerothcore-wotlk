@@ -67,6 +67,8 @@ namespace Movement
         /*  Final pass of initialization that launches spline movement.
          */
         int32 Launch();
+        // Used only by a prepared opt-in fall generator; an invalid/stale token refuses launch.
+        int32 LaunchOwnedFall(OwnedFallToken token);
 
         /*  Final pass of initialization that stops movement.
          */
@@ -152,6 +154,7 @@ namespace Movement
         */
         void DisableTransportPathTransformations();
     protected:
+        int32 LaunchImpl(OwnedFallToken token);
         MoveSplineInitArgs args;
         Unit*  unit;
     };

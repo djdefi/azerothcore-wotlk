@@ -32,6 +32,7 @@
 #include "UnitDefines.h"
 #include "UnitUtils.h"
 #include <functional>
+#include <memory>
 #include <utility>
 
 #define WORLD_TRIGGER   12999
@@ -262,6 +263,7 @@ enum DamageEffectType : uint8
 namespace Movement
 {
     class MoveSpline;
+    class MoveSplineInit;
 }
 
 enum DiminishingLevels
@@ -769,11 +771,19 @@ public:
     void ReplaceAllDynamicFlags(uint32 flag) override { SetUInt32Value(UNIT_DYNAMIC_FLAGS, flag); }
 
     // Movement flags
-    void AddUnitMovementFlag(uint32 f) { m_movementInfo.flags |= f; }
-    void RemoveUnitMovementFlag(uint32 f) { m_movementInfo.flags &= ~f; }
+    void AddUnitMovementFlag(uint32 f);
+    void RemoveUnitMovementFlag(uint32 f);
     [[nodiscard]] bool HasUnitMovementFlag(uint32 f) const { return (m_movementInfo.flags & f) != 0; }
     [[nodiscard]] uint32 GetUnitMovementFlags() const { return m_movementInfo.flags; }
-    void SetUnitMovementFlags(uint32 f) { m_movementInfo.flags = f; }
+    void SetUnitMovementFlags(uint32 f);
+
+    [[nodiscard]] std::optional<OwnedFallStatus> GetOwnedFallStatus(OwnedFallToken token) const;
+    /**
+     * Revoke before an authoritative external movement/control/frame write. Clears/stops only a still-owned
+     * trajectory in its original frame. Unknown/stale ownership is dropped without changing foreign state.
+     * Direct raw MovementInfo/flag writes bypass ownership tracking and must call this first.
+     */
+    void RevokeOwnedFall();
 
     void AddExtraUnitMovementFlag(uint16 f) { m_movementInfo.flags2 |= f; }
     void RemoveExtraUnitMovementFlag(uint16 f) { m_movementInfo.flags2 &= ~f; }
@@ -2138,6 +2148,7 @@ protected:
     void SetStunned(bool apply);
     void SetRooted(bool apply, bool stun = false, bool logout = false);
     void SendMoveRoot(bool state);
+    void OnFallInformationChanged();
 
     //----------- Protected variables ----------//
     UnitAI* i_AI;
@@ -2212,6 +2223,24 @@ protected:
     bool _instantCast;
 
 private:
+    friend class MotionMaster;
+    friend class OwnedFallMovementGenerator;
+    friend class Movement::MoveSplineInit;
+
+    bool HasOwnedFall() const;
+    bool OwnsFallSpline() const;
+    bool OwnedFallContextMatches() const;
+    OwnedFallToken PrepareOwnedFall(uint32 id, G3D::Vector3 const& destination);
+    bool CanLaunchOwnedFall(OwnedFallToken token) const;
+    uint32 RetireOwnedFall(OwnedFallResult result, bool stop, bool transfer = false);
+    uint32 PrepareFallSplineTransition(bool airborne);
+    void CommitOwnedFall(OwnedFallToken token, uint32 splineId, uint32 duration);
+    void FailOwnedFall(OwnedFallToken token);
+    void CompleteOwnedFall();
+    void CheckOwnedFallBeforeUpdate();
+    void DisableSpline(bool naturalArrival);
+    std::unique_ptr<OwnedFallData> _ownedFall;
+
     // Legacy proc handlers removed - all procs now use AuraScripts and spell_proc table
     bool HandleAuraRaidProcFromChargeWithValue(AuraEffect* triggeredByAura);
     bool HandleAuraRaidProcFromCharge(AuraEffect* triggeredByAura);

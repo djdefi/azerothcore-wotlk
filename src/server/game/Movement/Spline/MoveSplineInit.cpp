@@ -34,6 +34,18 @@ namespace Movement
 
     int32 MoveSplineInit::Launch()
     {
+        return LaunchImpl({});
+    }
+
+    int32 MoveSplineInit::LaunchOwnedFall(OwnedFallToken token)
+    {
+        if (!args.flags.falling || !unit->CanLaunchOwnedFall(token))
+            return 0;
+        return LaunchImpl(token);
+    }
+
+    int32 MoveSplineInit::LaunchImpl(OwnedFallToken token)
+    {
         MoveSpline& move_spline = *unit->movespline;
 
         bool transport = unit->HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT) && unit->GetTransGUID();
@@ -108,8 +120,17 @@ namespace Movement
         if (!args.Validate(unit))
             return 0;
 
+        // Retire an opt-in contribution only after validation, before a replacement commits its state.
+        if (!token)
+            moveFlags &= ~unit->PrepareFallSplineTransition(args.flags.falling || args.flags.parabolic ||
+                args.flags.flying || args.flags.transportEnter || args.flags.transportExit);
+        else
+            moveFlags |= MOVEMENTFLAG_FALLING;
+
         unit->m_movementInfo.SetMovementFlags(moveFlags);
         move_spline.Initialize(args);
+        if (token)
+            unit->CommitOwnedFall(token, move_spline.GetId(), move_spline.Duration());
 
         WorldPacket data(SMSG_MONSTER_MOVE, 64);
         data << unit->GetPackGUID();
@@ -121,9 +142,10 @@ namespace Movement
         }
 
         PacketBuilder::WriteMonsterMove(move_spline, data);
+        int32 ownedDuration = token ? move_spline.Duration() : 0;
         unit->SendMessageToSet(&data, true);
 
-        return move_spline.Duration();
+        return token ? ownedDuration : move_spline.Duration();
     }
 
     void MoveSplineInit::Stop()
@@ -134,6 +156,7 @@ namespace Movement
     void MoveSplineInit::Stop(bool forceCurrentPosition)
     {
         MoveSpline& move_spline = *unit->movespline;
+        unit->RetireOwnedFall(OwnedFallResult::Cancelled, false);
 
         // No need to stop if we are not moving
         if (move_spline.Finalized() && !forceCurrentPosition)

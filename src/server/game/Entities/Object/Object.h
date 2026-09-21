@@ -693,7 +693,7 @@ public:
     [[nodiscard]] uint32 GetTransTime()   const { return m_movementInfo.transport.time; }
     [[nodiscard]] int8 GetTransSeat()     const { return m_movementInfo.transport.seat; }
     [[nodiscard]] virtual ObjectGuid GetTransGUID()   const;
-    void SetTransport(Transport* t) { m_transport = t; }
+    void SetTransport(Transport* t);
 
     MovementInfo m_movementInfo;
 

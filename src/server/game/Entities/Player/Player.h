@@ -2377,11 +2377,7 @@ public:
     SafeUnitPointer m_mover;
     WorldObject* m_seer;
     std::set<Unit*> m_isInSharedVisionOf;
-    void SetFallInformation(uint32 time, float z)
-    {
-        m_lastFallTime = time;
-        m_lastFallZ = z;
-    }
+    void SetFallInformation(uint32 time, float z);
     void HandleFall(MovementInfo const& movementInfo);
 
     [[nodiscard]] bool canFlyInZone(uint32 mapid, uint32 zone, SpellInfo const* bySpell);
