@@ -63,6 +63,7 @@ struct OwnedFallData
 {
     OwnedFallStatus Status;
     uint64 BookkeepingVersion = 0;
+    bool OwnsBookkeeping = false;
 };
 
 #endif

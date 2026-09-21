@@ -74,6 +74,7 @@ OwnedFallToken Unit::PrepareOwnedFall(uint32 id, G3D::Vector3 const& destination
         _ownedFall = std::make_unique<OwnedFallData>();
     auto& status = _ownedFall->Status;
     status = {};
+    _ownedFall->OwnsBookkeeping = false;
     status.Token.Value = ++NextOwnedFallToken;
     status.MovementId = id;
     status.MapId = GetMapId();
@@ -100,6 +101,7 @@ void Unit::CommitOwnedFall(OwnedFallToken token, uint32 splineId, uint32 duratio
     auto& status = _ownedFall->Status;
     m_movementInfo.SetFallTime(0);
     ToPlayer()->SetFallInformation(GameTime::GetGameTime().count(), status.Start.z);
+    _ownedFall->OwnsBookkeeping = true;
     status.SplineId = splineId;
     status.Duration = duration;
     status.InterruptCount = movespline->GetInterruptCount();
@@ -132,6 +134,7 @@ uint32 Unit::RetireOwnedFall(OwnedFallResult result, bool stop, bool transfer)
     status.Result = knownState ? result : OwnedFallResult::Revoked;
     if (!knownState)
     {
+        _ownedFall->OwnsBookkeeping = false;
         if (stop && ownSpline && !movespline->Finalized())
         {
             Movement::MoveSplineInit init(this);
@@ -140,13 +143,14 @@ uint32 Unit::RetireOwnedFall(OwnedFallResult result, bool stop, bool transfer)
         return 0;
     }
     if (transfer)
+    {
+        _ownedFall->OwnsBookkeeping = false;
         return 0;
+    }
 
     uint32 released = m_movementInfo.GetMovementFlags() & MOVEMENTFLAG_FALLING;
     m_movementInfo.RemoveMovementFlag(MOVEMENTFLAG_FALLING);
-    m_movementInfo.SetFallTime(0);
-    if (IsPlayer())
-        ToPlayer()->SetFallInformation(0, GetPositionZ());
+    ReleaseOwnedFallBookkeeping();
     if (stop && !movespline->Finalized())
     {
         Movement::MoveSplineInit init(this);
@@ -155,9 +159,24 @@ uint32 Unit::RetireOwnedFall(OwnedFallResult result, bool stop, bool transfer)
     return released;
 }
 
+void Unit::ReleaseOwnedFallBookkeeping()
+{
+    if (!_ownedFall || !_ownedFall->OwnsBookkeeping)
+        return;
+
+    // The landing receipt is terminal before its callbacks finish. Bookkeeping remains independently owned.
+    _ownedFall->OwnsBookkeeping = false;
+    if (IsPlayer() && OwnedFallContextMatches())
+    {
+        m_movementInfo.SetFallTime(0);
+        ToPlayer()->SetFallInformation(0, GetPositionZ());
+    }
+}
+
 void Unit::RevokeOwnedFall()
 {
     RetireOwnedFall(OwnedFallResult::Revoked, true);
+    ReleaseOwnedFallBookkeeping();
     if (_ownedFall)
     {
         ++_ownedFall->BookkeepingVersion;
@@ -168,7 +187,9 @@ void Unit::RevokeOwnedFall()
 
 uint32 Unit::PrepareFallSplineTransition(bool airborne)
 {
-    return RetireOwnedFall(OwnedFallResult::Replaced, false, airborne);
+    uint32 released = RetireOwnedFall(OwnedFallResult::Replaced, false, airborne);
+    ReleaseOwnedFallBookkeeping();
+    return released;
 }
 
 void Unit::OnFallInformationChanged()
@@ -176,6 +197,7 @@ void Unit::OnFallInformationChanged()
     if (!_ownedFall)
         return;
     RetireOwnedFall(OwnedFallResult::Revoked, true);
+    ReleaseOwnedFallBookkeeping();
     ++_ownedFall->BookkeepingVersion;
 }
 
@@ -204,9 +226,22 @@ void Unit::RemoveUnitMovementFlag(uint32 flags)
 
 void Unit::SetUnitMovementFlags(uint32 flags)
 {
+    uint32 previousFlags = m_movementInfo.flags;
     bool foreignChange = ((flags ^ m_movementInfo.flags) & (FallFlags | ForeignFrames)) != 0;
-    if (HasOwnedFall() && ((flags & ForeignFrames) || !(flags & MOVEMENTFLAG_FALLING)))
+    bool hasClaim = HasOwnedFall() || (_ownedFall && _ownedFall->OwnsBookkeeping);
+    if (hasClaim && ((flags & ForeignFrames) || ((flags ^ previousFlags) & FallFlags)))
+    {
+        bool ownedContribution = movespline->GetId() == _ownedFall->Status.SplineId &&
+            OwnedFallContextMatches() && !(previousFlags & MOVEMENTFLAG_FALLING_FAR);
         RevokeOwnedFall();
+        if (ownedContribution)
+        {
+            flags &= ~MOVEMENTFLAG_FALLING;
+            // A copied mask cannot resurrect the server-spline marker cleared by stopping that owned spline.
+            if (movespline->Finalized() && !m_movementInfo.HasMovementFlag(MOVEMENTFLAG_SPLINE_ENABLED))
+                flags &= ~MOVEMENTFLAG_SPLINE_ENABLED;
+        }
+    }
     if (foreignChange && _ownedFall)
         ++_ownedFall->BookkeepingVersion;
     m_movementInfo.flags = flags;
@@ -257,16 +292,17 @@ void Unit::CompleteOwnedFall()
     landing.pos.Relocate(GetPosition());
     landing.fallTime = status.Elapsed;
     // This is the real terminal spline position, never a synthetic destination supplied at cancellation.
-    status.LandingHandled = true;
     ToPlayer()->HandleFall(landing);
+
+    if (_ownedFall->Status.Token == token && _ownedFall->Status.Result == OwnedFallResult::Landed)
+        _ownedFall->Status.LandingHandled = true;
 
     // Landing effects can synchronously change motion or fall information. Never reset the new writer.
     if (_ownedFall->Status.Token == token && _ownedFall->Status.Result == OwnedFallResult::Landed &&
         movespline->GetId() == splineId && _ownedFall->BookkeepingVersion == version &&
         OwnedFallContextMatches() && IsAlive())
     {
-        m_movementInfo.SetFallTime(0);
-        ToPlayer()->SetFallInformation(0, GetPositionZ());
+        ReleaseOwnedFallBookkeeping();
     }
 }
 
@@ -304,6 +340,8 @@ void OwnedFallMovementGenerator::Finalize(Unit* unit)
     auto status = unit->GetOwnedFallStatus(_token);
     if (status && status->Result == OwnedFallResult::Active)
         unit->RetireOwnedFall(OwnedFallResult::Cancelled, true);
+    else if (status && status->Result == OwnedFallResult::Landed)
+        unit->ReleaseOwnedFallBookkeeping();
     else
         unit->FailOwnedFall(_token);
 }

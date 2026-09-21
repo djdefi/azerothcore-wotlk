@@ -2140,7 +2140,11 @@ namespace
         ASSERT_TRUE(token);
         _token = *token;
         unsigned landingPackets = 0;
-        _player->OnEnvironmentalDamage = [&] { ++landingPackets; };
+        _player->OnEnvironmentalDamage = [&]
+        {
+            EXPECT_FALSE(Status().LandingHandled);
+            ++landingPackets;
+        };
         Tick(_player->movespline->Duration());
         EXPECT_EQ(Status().Result, OwnedFallResult::Landed);
         EXPECT_TRUE(Status().LandingHandled);
@@ -2167,10 +2171,88 @@ namespace
         EXPECT_EQ(Status().Result, OwnedFallResult::Landed);
         EXPECT_TRUE(Status().LandingHandled);
         EXPECT_EQ(_player->GetPhaseMask(), 2u);
-        // The phase write revoked further cleanup authority; the old start height was not rewritten afterward.
-        EXPECT_TRUE(_player->IsFalling());
+        // A context-only writer retires the outstanding old bookkeeping before changing phase.
+        EXPECT_FALSE(_player->IsFalling());
+        EXPECT_EQ(_player->m_movementInfo.fallTime, 0u);
         EXPECT_FALSE(_player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING));
         EXPECT_FALSE(_player->GetMotionMaster()->CancelOwnedFall(_token));
+    }
+
+    TEST_F(OwnedFallMovementTest, GenuineForeignLandingCallbackBookkeepingMustSurvive)
+    {
+        ON_CALL(*static_cast<PointPathWorld*>(sWorld.get()), getRate(_)).WillByDefault(Return(1.0f));
+        _player->Relocate(10, 10, 30);
+        _player->SetFallInformation(0, 30);
+        auto token = _player->GetMotionMaster()->MoveFallOwned(81);
+        ASSERT_TRUE(token);
+        _token = *token;
+        _player->OnEnvironmentalDamage = [&]
+        {
+            EXPECT_FALSE(Status().LandingHandled);
+            _player->AddUnitMovementFlag(MOVEMENTFLAG_FALLING);
+            _player->SetFallInformation(555, 60);
+        };
+        Tick(_player->movespline->Duration());
+        EXPECT_EQ(Status().Result, OwnedFallResult::Landed);
+        EXPECT_TRUE(Status().LandingHandled);
+        EXPECT_TRUE(_player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING));
+        EXPECT_TRUE(_player->IsFalling());
+        EXPECT_FALSE(_player->GetMotionMaster()->CancelOwnedFall(_token));
+        EXPECT_TRUE(_player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING));
+    }
+
+    TEST_F(OwnedFallMovementTest, WholeMaskModeSwitchCannotReintroduceReleasedOwnedFalling)
+    {
+        Begin();
+        _player->SetUnitMovementFlags(_player->GetUnitMovementFlags() | MOVEMENTFLAG_SWIMMING);
+        EXPECT_EQ(Status().Result, OwnedFallResult::Revoked);
+        EXPECT_FALSE(_player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING));
+        EXPECT_FALSE(_player->HasUnitMovementFlag(MOVEMENTFLAG_SPLINE_ENABLED));
+        EXPECT_TRUE(_player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING));
+        _player->RemoveUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+        Tick(1);
+        EXPECT_TRUE(_player->GetMotionMaster()->MovePointPath(82, {{10, 10, 12}, {15, 10, 10}}, 0, 0));
+    }
+
+    TEST_F(OwnedFallMovementTest, ExplicitForeignFlagAssertionMustNotBeSanitizedAsAnInheritedMask)
+    {
+        Begin();
+        _player->AddUnitMovementFlag(MOVEMENTFLAG_FALLING);
+        _player->SetUnitMovementFlags(_player->GetUnitMovementFlags() | MOVEMENTFLAG_SWIMMING);
+        EXPECT_EQ(Status().Result, OwnedFallResult::Revoked);
+        EXPECT_TRUE(_player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING));
+        EXPECT_TRUE(_player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING));
+        EXPECT_FALSE(_player->GetMotionMaster()->CancelOwnedFall(_token));
+        EXPECT_TRUE(_player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING));
+    }
+
+    TEST_F(OwnedFallMovementTest, StockKnockbackCommandMustRevokeBeforeDelayedAcknowledgement)
+    {
+        Begin();
+        uint32 duration = _player->movespline->Duration();
+        _player->KnockbackFrom(9, 10, 5, 3);
+        EXPECT_EQ(Status().Result, OwnedFallResult::Revoked);
+        EXPECT_TRUE(_player->movespline->Finalized());
+        Tick(duration + 1);
+        EXPECT_EQ(Status().Result, OwnedFallResult::Revoked);
+        EXPECT_FALSE(Status().LandingHandled);
+        EXPECT_FLOAT_EQ(_player->GetPositionZ(), 12.0f);
+
+        MovementInfo incoming = _player->m_movementInfo;
+        incoming.guid = _player->GetGUID();
+        incoming.flags = MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR;
+        incoming.fallTime = 123;
+        incoming.pos.Relocate(11, 10, 13);
+        WorldPacket encoded(MSG_MOVE_HEARTBEAT);
+        _player->GetSession()->WriteMovementInfo(&encoded, &incoming);
+        WorldPacket packet(CMSG_MOVE_KNOCK_BACK_ACK);
+        packet << incoming.guid.WriteAsPacked() << uint32(1);
+        std::size_t guidSize = _player->GetPackGUID().size();
+        packet.append(encoded.contents() + guidSize, encoded.size() - guidSize);
+        _player->GetSession()->HandleMoveKnockBackAck(packet);
+        EXPECT_FALSE(_player->GetMotionMaster()->CancelOwnedFall(_token));
+        EXPECT_EQ(_player->m_movementInfo.flags, incoming.flags);
+        EXPECT_EQ(_player->m_movementInfo.fallTime, 123u);
     }
 
     TEST_F(OwnedFallMovementTest, InitialPacketCallbacksCannotAdoptADeletedOwnerOrForeignSpline)

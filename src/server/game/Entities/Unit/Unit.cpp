@@ -15438,6 +15438,7 @@ void Unit::KnockbackFrom(float x, float y, float speedXY, float speedZ)
     }
     else
     {
+        RevokeOwnedFall();
         float vcos, vsin;
         GetSinCos(x, y, vsin, vcos);
 

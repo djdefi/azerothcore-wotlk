@@ -2233,6 +2233,7 @@ private:
     OwnedFallToken PrepareOwnedFall(uint32 id, G3D::Vector3 const& destination);
     bool CanLaunchOwnedFall(OwnedFallToken token) const;
     uint32 RetireOwnedFall(OwnedFallResult result, bool stop, bool transfer = false);
+    void ReleaseOwnedFallBookkeeping();
     uint32 PrepareFallSplineTransition(bool airborne);
     void CommitOwnedFall(OwnedFallToken token, uint32 splineId, uint32 duration);
     void FailOwnedFall(OwnedFallToken token);
