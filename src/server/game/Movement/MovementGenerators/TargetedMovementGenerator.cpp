@@ -106,7 +106,8 @@ bool ChaseMovementGenerator<T>::DispatchSplineToPosition(T* owner, float x, floa
 
     bool success = i_path->CalculatePath(x, y, z, forceDest);
     uint32 pathType = i_path->GetPathType();
-    bool pathFailed = !success || (pathType & PATHFIND_NOPATH);
+    // A partial path with no reachable progress holds only the owner's own position.
+    bool pathFailed = !success || (pathType & PATHFIND_NOPATH) || i_path->GetPath().size() < 2;
 
     // For pets, treat incomplete paths as failures to avoid clipping through geometry
     // Players and Player-controlled units have more erratic movement, skip failure
@@ -656,7 +657,7 @@ bool FollowMovementGenerator<T>::DoUpdate(T* owner, uint32 time_diff)
         if (owner->IsHovering())
             owner->UpdateAllowedPositionZ(x, y, z);
 
-        bool success = i_path->CalculatePath(x, y, z, forceDest);
+        bool success = i_path->CalculatePath(x, y, z, forceDest) && i_path->GetPath().size() >= 2;
         if (!success || (i_path->GetPathType() & PATHFIND_NOPATH && !followingMaster))
         {
             if (!owner->IsStopped())
