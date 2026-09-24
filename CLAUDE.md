@@ -4,6 +4,24 @@ AzerothCore is a C++ MMORPG server emulator for World of Warcraft 3.3.5a (WotLK)
 
 ## Agent rules
 
+- **Own the requested outcome through completion.** A plan, patch, passing isolated test, PR, or handoff is an
+  intermediate result unless it is the entire requested deliverable. Finish the authorized implementation,
+  integration, and verification before reporting success; distinguish completed subtasks from the overall outcome.
+  Respect narrower requests such as publication-only work; do not expand them into unauthorized implementation.
+- **Resolve routine coordination instead of parking work.** Reconcile stale references, ordinary conflicts, and
+  dependencies within the granted scope. Use one accountable owner and the simplest viable workflow; do not create
+  duplicate workstreams or repeat approval requests for already-authorized actions. Preserve explicitly required
+  revision identities and safety boundaries rather than silently bypassing them.
+  The owner retains integration responsibility across handoffs. Give each required gate concrete, executable
+  success criteria and work toward satisfying them rather than treating the gate itself as a stopping point.
+- **Report genuine blockers as unfinished work.** First attempt safe alternatives within scope. If completion still
+  requires unavailable access, a consequential user decision, or additional authorization, state the exact blocker,
+  observed failure, attempted remedies, affected outcome, remaining work, and exact action needed to resume.
+  Do not label blocked work complete or abandon it at a handoff.
+- **Use current evidence for status claims.** Refresh relevant live state before reporting it; distinguish historical
+  results from current verification and owner-provided evidence from checks performed in this session.
+- **Completion does not override authorization.** Preserve build, Git, data, and deployment restrictions; finishing
+  an authorized subtask does not authorize merging, deploying, or changing a pinned candidate.
 - **Do not configure or build unless explicitly asked.** Builds are slow (CMake + compile of a large C++ codebase) and rarely needed to make code changes.
 - **Never edit SQL files outside `data/sql/updates/pending_db_*/`.** `data/sql/base/`, `data/sql/archive/`, and `data/sql/updates/db_*/` are immutable (do not modify).
 - **Do not run git commands that modify repo state** (commit, branch, merge, rebase, reset, push, …) unless explicitly requested, and do not include them in plans. Read-only git (status, diff, log) is fine.
