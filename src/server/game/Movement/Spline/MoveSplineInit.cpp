@@ -235,7 +235,7 @@ namespace Movement
         {
             PathGenerator path(unit);
             bool result = path.CalculatePath(start.x, start.y, start.z, dest.x, dest.y, dest.z, forceDestination);
-            if (result && !(path.GetPathType() & PATHFIND_NOPATH))
+            if (result && !(path.GetPathType() & PATHFIND_NOPATH) && path.GetPath().size() >= 2)
             {
                 MovebyPath(path.GetPath());
                 return;
@@ -254,7 +254,7 @@ namespace Movement
         {
             PathGenerator path(unit);
             bool result = path.CalculatePath(dest.x, dest.y, dest.z, forceDestination);
-            if (result && !(path.GetPathType() & PATHFIND_NOPATH))
+            if (result && !(path.GetPathType() & PATHFIND_NOPATH) && path.GetPath().size() >= 2)
             {
                 MovebyPath(path.GetPath());
                 return;
