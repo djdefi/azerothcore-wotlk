@@ -28,8 +28,8 @@ namespace Movement
     {
         Location()  = default;
         Location(float x, float y, float z, float o) : Vector3(x, y, z), orientation(o) {}
-        Location(const Vector3& v) : Vector3(v) {}
-        Location(const Vector3& v, float o) : Vector3(v), orientation(o) {}
+        Location(Vector3 const& v) : Vector3(v) {}
+        Location(Vector3 const& v, float o) : Vector3(v), orientation(o) {}
 
         float orientation{0};
     };
@@ -79,10 +79,10 @@ namespace Movement
         std::optional<StopInfo> _lastStop;
         uint64 _interruptCount = 0;
 
-        void init_spline(const MoveSplineInitArgs& args);
+        void init_spline(MoveSplineInitArgs const& args);
 
     protected:
-        [[nodiscard]] const MySpline::ControlArray& getPath() const { return spline.getPoints(); }
+        [[nodiscard]] MySpline::ControlArray const& getPath() const { return spline.getPoints(); }
         void computeParabolicElevation(float& el) const;
         void computeFallElevation(float& el) const;
 
@@ -103,7 +103,7 @@ namespace Movement
         [[nodiscard]] std::optional<StopInfo> const& GetLastStop() const { return _lastStop; }
 
     public:
-        void Initialize(const MoveSplineInitArgs&);
+        void Initialize(MoveSplineInitArgs const&);
         [[nodiscard]] bool Initialized() const { return !spline.empty(); }
 
         MoveSpline();

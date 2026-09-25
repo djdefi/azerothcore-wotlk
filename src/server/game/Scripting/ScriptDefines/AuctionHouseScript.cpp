@@ -96,7 +96,7 @@ void ScriptMgr::OnBeforeAuctionFinalization(AuctionEntry const* entry, AuctionFi
         script->OnBeforeAuctionFinalization(entry, reason, trans));
 }
 
-AuctionHouseScript::AuctionHouseScript(const char* name, std::vector<uint16> enabledHooks)
+AuctionHouseScript::AuctionHouseScript(char const* name, std::vector<uint16> enabledHooks)
     : ScriptObject(name, AUCTIONHOUSEHOOK_END)
 {
     // If empty - enable all available hooks.

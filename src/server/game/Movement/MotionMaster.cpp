@@ -642,7 +642,7 @@ void MotionMaster::MoveTakeoff(uint32 id, float x, float y, float z, float speed
 void MotionMaster::MoveKnockbackFrom(float srcX, float srcY, float speedXY, float speedZ)
 {
     //this function may make players fall below map
-    if (_owner->IsPlayer())
+    if (_owner->IsPlayer() && _owner->IsClientControlled())
         return;
 
     if (speedXY <= 0.1f)
@@ -661,6 +661,15 @@ void MotionMaster::MoveKnockbackFrom(float srcX, float srcY, float speedXY, floa
     init.SetParabolic(max_height, 0);
     init.SetOrientationFixed(true);
     init.SetVelocity(speedXY);
+
+    // Do not mutate an active fleeing/confused movement generator,
+    // doing so breaks the movement upon landing from the knockback
+    MovementGeneratorType slotType = GetMotionSlotType(MOTION_SLOT_CONTROLLED);
+    if (slotType == FLEEING_MOTION_TYPE || slotType == CONFUSED_MOTION_TYPE)
+    {
+        init.Launch();
+        return;
+    }
 
     Mutate(new EffectMovementGenerator(init, 0), MOTION_SLOT_CONTROLLED);
 }
@@ -791,7 +800,7 @@ bool MotionMaster::CancelOwnedFall(OwnedFallToken token)
 /**
  * @brief The unit will charge the target. Doesn't work with UNIT_FLAG_DISABLE_MOVE
  */
-void MotionMaster::MoveCharge(float x, float y, float z, float speed, uint32 id, const Movement::PointsArray* path, bool generatePath, float orientation /* = 0.0f*/, ObjectGuid targetGUID /*= ObjectGuid::Empty*/)
+void MotionMaster::MoveCharge(float x, float y, float z, float speed, uint32 id, Movement::PointsArray const* path, bool generatePath, float orientation /* = 0.0f*/, ObjectGuid targetGUID /*= ObjectGuid::Empty*/)
 {
     if (_owner->HasUnitFlag(UNIT_FLAG_DISABLE_MOVE))
         return;
@@ -900,7 +909,17 @@ void MotionMaster::MoveTaxiFlight(uint32 path, uint32 pathnode)
         {
             LOG_DEBUG("movement.motionmaster", "{} taxi to (Path {} node {})", _owner->GetName(), path, pathnode);
             FlightPathMovementGenerator* mgen = new FlightPathMovementGenerator(pathnode);
-            mgen->LoadPath(_owner->ToPlayer());
+            Player* player = _owner->ToPlayer();
+            if (!mgen->LoadPath(player))
+            {
+                LOG_ERROR("movement.motionmaster", "{} failed to build taxi path (Path {} node {}), clearing taxi destinations",
+                    _owner->GetName(), path, pathnode);
+                player->m_taxi.ClearTaxiDestinations();
+                player->Dismount();
+                delete mgen;
+                return;
+            }
+
             Mutate(mgen, MOTION_SLOT_CONTROLLED);
         }
         else
