@@ -465,6 +465,11 @@ Unit::~Unit()
     // m_followingMe is already empty.
     RemoveAllFollowers();
 
+    // Single target auras this unit cast that are still registered here must not keep a pointer to it.
+    for (Aura* aura : m_scAuras)
+        aura->DetachSingleTargetCaster();
+    m_scAuras.clear();
+
     // set current spells as deletable
     for (uint8 i = 0; i < CURRENT_MAX_SPELL; ++i)
         if (m_currentSpells[i])
@@ -4444,7 +4449,7 @@ void Unit::_AddAura(UnitAura* aura, Unit* caster)
          */
 
         // register single target aura
-        caster->GetSingleCastAuras().push_back(aura);
+        aura->RegisterSingleTarget(caster);
         // remove other single target auras
         Unit::AuraList& scAuras = caster->GetSingleCastAuras();
         for (Unit::AuraList::iterator itr = scAuras.begin(); itr != scAuras.end();)
@@ -5071,7 +5076,7 @@ void Unit::RemoveAurasDueToSpellBySteal(uint32 spellId, ObjectGuid casterGUID, U
                             newAura->UnregisterSingleTarget();
                             // bring back single target aura status to the old aura
                             aura->SetIsSingleTarget(true);
-                            caster->GetSingleCastAuras().push_back(aura);
+                            aura->RegisterSingleTarget(caster);
                         }
                         // FIXME: using aura->GetMaxDuration() maybe not blizzlike but it fixes stealing of spells like Innervate
                         newAura->SetLoadedState(aura->GetMaxDuration(), int32(dur), stealCharge ? 1 : aura->GetCharges(), 1, recalculateMask, &damage[0]);

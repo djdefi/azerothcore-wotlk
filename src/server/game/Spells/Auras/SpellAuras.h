@@ -166,7 +166,9 @@ public:
     bool IsSingleTarget() const {return m_isSingleTarget; }
     bool IsSingleTargetWith(Aura const* aura) const;
     void SetIsSingleTarget(bool val) { m_isSingleTarget = val; }
+    void RegisterSingleTarget(Unit* caster);
     void UnregisterSingleTarget();
+    void DetachSingleTargetCaster() { m_singleTargetCaster = nullptr; }
     int32 CalcDispelChance(Unit* auraTarget, bool offensive) const;
 
     void SetLoadedState(int32 maxduration, int32 duration, int32 charges, uint8 stackamount, uint8 recalculateMask, int32* amount);
@@ -279,6 +281,10 @@ protected:
     bool m_isUsingCharges: 1;
 
     TimePoint m_procCooldown;
+
+    // The unit whose single cast list holds this aura. Unregistering through it rather than through
+    // GetCaster() keeps that list consistent when the map-scoped caster lookup fails; ~Unit clears it.
+    Unit* m_singleTargetCaster;
 
 private:
     Unit::AuraApplicationList m_removedApplications;
