@@ -355,7 +355,7 @@ Aura::Aura(SpellInfo const* spellproto, WorldObject* owner, Unit* caster, Item* 
     m_castItemGuid(itemGUID ? itemGUID : castItem ? castItem->GetGUID() : ObjectGuid::Empty), m_castItemEntry(castItem ? castItem->GetEntry() : 0), m_applyTime(GameTime::GetGameTime().count()),
     m_owner(owner), m_timeCla(0), m_updateTargetMapInterval(0),
     m_casterLevel(caster ? caster->GetLevel() : m_spellInfo->SpellLevel), m_procCharges(0), m_stackAmount(1),
-    m_isRemoved(false), m_isSingleTarget(false), m_isUsingCharges(false), m_triggeredByAuraSpellInfo(nullptr)
+    m_isRemoved(false), m_isSingleTarget(false), m_isUsingCharges(false), m_singleTargetCaster(nullptr), m_triggeredByAuraSpellInfo(nullptr)
 {
     if ((m_spellInfo->ManaPerSecond || m_spellInfo->ManaPerSecondPerLevel) && !m_spellInfo->HasAttribute(SPELL_ATTR2_NO_TARGET_PER_SECOND_COST))
         m_timeCla = 1 * IN_MILLISECONDS;
@@ -1203,18 +1203,25 @@ bool Aura::IsSingleTargetWith(Aura const* aura) const
     return false;
 }
 
+void Aura::RegisterSingleTarget(Unit* caster)
+{
+    ASSERT(m_isSingleTarget && caster && !m_singleTargetCaster);
+    m_singleTargetCaster = caster;
+    caster->GetSingleCastAuras().push_back(this);
+}
+
 void Aura::UnregisterSingleTarget()
 {
     ASSERT(m_isSingleTarget);
-    Unit* caster = GetCaster();
-    if (!caster)
-    {
-        LOG_INFO("spells", "Aura::UnregisterSingleTarget: (A1) - {}, {}, {}, {}", GetId(), GetOwner()->GetTypeId(), GetOwner()->GetEntry(), GetOwner()->GetName());
-        LOG_ERROR("spells", "Aura::UnregisterSingleTarget: No caster was found."); //ASSERT(caster);
-    }
+    // GetCaster() finds the caster only on the owner's map. When it failed, this aura stayed in the
+    // caster's list after being freed, and the caster's next single target cast read freed memory in
+    // Unit::_AddAura. Unregister from the unit the aura was registered with instead.
+    if (m_singleTargetCaster)
+        m_singleTargetCaster->GetSingleCastAuras().remove(this);
     else
-        caster->GetSingleCastAuras().remove(this);
+        LOG_ERROR("spells", "Aura::UnregisterSingleTarget: aura {} on {} has no registered caster.", GetId(), GetOwner()->GetName());
 
+    m_singleTargetCaster = nullptr;
     SetIsSingleTarget(false);
 }
 
