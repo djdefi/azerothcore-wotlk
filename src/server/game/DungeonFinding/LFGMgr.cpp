@@ -419,13 +419,12 @@ namespace lfg
         {
             this->lastProposalId = m_lfgProposalId; // pussywizard: task 2 is done independantly, store previous value in LFGMgr for future use
             uint8 newGroupsProcessed = 0;
-            // Check if a proposal can be formed with the new groups being added
+            // Check if a proposal can be formed with the new groups being added.
+            // Give every faction queue its one new entry per update. Stopping after the first
+            // queue that processed anything meant the Alliance queue (TeamId 0) starved the
+            // Horde queue whenever Alliance joins kept arriving.
             for (LfgQueueContainer::iterator it = QueuesStore.begin(); it != QueuesStore.end(); ++it)
-            {
                 newGroupsProcessed += it->second.FindGroups();
-                if (newGroupsProcessed)
-                    break;
-            }
 
             // Update all players status queue info
             if (!newGroupsProcessed) // don't do this on updates that precessed groups (performance)
@@ -436,11 +435,18 @@ namespace lfg
         {
             if (lastProposalId != m_lfgProposalId)
             {
-                // pussywizard: only one proposal can be created in World::Update (during maps update), and it has id == m_lfgProposalId, so try to find only that one, dunno why for loop here xD
-                for (LfgProposalContainer::const_iterator itProposal = ProposalsStore.find(m_lfgProposalId); itProposal != ProposalsStore.end(); ++itProposal)
+                // Task 1 can create one proposal per faction queue, so handle every proposal created
+                // since it ran. Collect the ids first: UpdateProposal may erase from ProposalsStore.
+                std::vector<uint32> newProposalIds;
+                for (LfgProposalContainer::const_iterator itProposal = ProposalsStore.upper_bound(lastProposalId); itProposal != ProposalsStore.end(); ++itProposal)
+                    newProposalIds.push_back(itProposal->first);
+
+                for (uint32 proposalId : newProposalIds)
                 {
-                    uint32 proposalId = itProposal->first;
-                    LfgProposal& proposal = ProposalsStore[proposalId];
+                    LfgProposalContainer::iterator itProposal = ProposalsStore.find(proposalId);
+                    if (itProposal == ProposalsStore.end())
+                        continue;
+                    LfgProposal& proposal = itProposal->second;
 
                     ObjectGuid guid;
                     for (LfgProposalPlayerContainer::const_iterator itPlayers = proposal.players.begin(); itPlayers != proposal.players.end(); ++itPlayers)
