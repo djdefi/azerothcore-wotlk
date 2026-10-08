@@ -88,7 +88,7 @@ Map::Map(uint32 id, uint32 InstanceId, uint8 SpawnMode, Map* _parent) :
 // Hook called after map is created AND after added to map list
 void Map::OnCreateMap()
 {
-    // Instances load all grids by default (both base map and child maps)
+    // Instances load every grid that holds a spawn or corpse (see LoadAllGrids)
     if (GetInstanceId())
         LoadAllGrids();
 
@@ -220,6 +220,27 @@ void Map::LoadGrid(float x, float y)
 
 void Map::LoadAllGrids()
 {
+    // An instance needs every spawn and corpse loaded at creation, not all 4096 grids: a dungeon's
+    // spawns sit in at most nine, and each empty MapGrid still costs ~640 bytes. Empty grids are
+    // created on demand by the ordinary terrain and visibility paths.
+    if (GetInstanceId())
+    {
+        for (uint32 gridX = 0; gridX < MAX_NUMBER_OF_GRIDS; ++gridX)
+        {
+            for (uint32 gridY = 0; gridY < MAX_NUMBER_OF_GRIDS; ++gridY)
+            {
+                uint32 const gridId = gridY * MAX_NUMBER_OF_GRIDS + gridX;
+                CellObjectGuids const& guids = sObjectMgr->GetGridObjectGuids(GetId(), GetSpawnMode(), gridId);
+                std::unordered_set<Corpse*> const* corpses = GetCorpsesInGrid(gridId);
+                if (guids.creatures.empty() && guids.gameobjects.empty() && (!corpses || corpses->empty()))
+                    continue;
+
+                EnsureGridLoaded(Cell(CellCoord(gridX * MAX_NUMBER_OF_CELLS, gridY * MAX_NUMBER_OF_CELLS)));
+            }
+        }
+        return;
+    }
+
     for (uint32 cellX = 0; cellX < TOTAL_NUMBER_OF_CELLS_PER_MAP; cellX++)
         for (uint32 cellY = 0; cellY < TOTAL_NUMBER_OF_CELLS_PER_MAP; cellY++)
             LoadGrid((cellX + 0.5f - CENTER_GRID_CELL_ID) * SIZE_OF_GRID_CELL, (cellY + 0.5f - CENTER_GRID_CELL_ID) * SIZE_OF_GRID_CELL);
