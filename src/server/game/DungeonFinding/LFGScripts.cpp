@@ -43,6 +43,7 @@ namespace lfg
 
     void LFGPlayerScript::OnPlayerLevelChanged(Player* player, uint8 /*oldLevel*/)
     {
+        std::lock_guard<std::recursive_mutex> guard(sLFGMgr->GetLock());
         if (!sLFGMgr->isOptionEnabled(LFG_OPTION_ENABLE_DUNGEON_FINDER | LFG_OPTION_ENABLE_RAID_BROWSER | LFG_OPTION_ENABLE_SEASONAL_BOSSES))
             return;
 
@@ -51,6 +52,7 @@ namespace lfg
 
     void LFGPlayerScript::OnPlayerLogout(Player* player)
     {
+        std::lock_guard<std::recursive_mutex> guard(sLFGMgr->GetLock());
         if (!sLFGMgr->isOptionEnabled(LFG_OPTION_ENABLE_DUNGEON_FINDER | LFG_OPTION_ENABLE_RAID_BROWSER | LFG_OPTION_ENABLE_SEASONAL_BOSSES))
             return;
 
@@ -71,6 +73,7 @@ namespace lfg
 
     void LFGPlayerScript::OnPlayerLogin(Player* player)
     {
+        std::lock_guard<std::recursive_mutex> guard(sLFGMgr->GetLock());
         if (!sLFGMgr->isOptionEnabled(LFG_OPTION_ENABLE_DUNGEON_FINDER | LFG_OPTION_ENABLE_RAID_BROWSER | LFG_OPTION_ENABLE_SEASONAL_BOSSES))
             return;
 
@@ -95,6 +98,7 @@ namespace lfg
 
     void LFGPlayerScript::OnPlayerBindToInstance(Player* player, Difficulty difficulty, uint32 mapId, bool /*permanent*/)
     {
+        std::lock_guard<std::recursive_mutex> guard(sLFGMgr->GetLock());
         MapEntry const* mapEntry = sMapStore.LookupEntry(mapId);
         if (mapEntry->IsDungeon() && difficulty > DUNGEON_DIFFICULTY_NORMAL)
             sLFGMgr->InitializeLockedDungeons(player, player->GetGroup());
@@ -154,6 +158,7 @@ namespace lfg
 
     void LFGGroupScript::OnAddMember(Group* group, ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(sLFGMgr->GetLock());
         if (!sLFGMgr->isOptionEnabled(LFG_OPTION_ENABLE_DUNGEON_FINDER | LFG_OPTION_ENABLE_RAID_BROWSER | LFG_OPTION_ENABLE_SEASONAL_BOSSES))
             return;
 
@@ -196,6 +201,7 @@ namespace lfg
 
     void LFGGroupScript::OnRemoveMember(Group* group, ObjectGuid guid, RemoveMethod method, ObjectGuid kicker, char const* reason)
     {
+        std::lock_guard<std::recursive_mutex> guard(sLFGMgr->GetLock());
         // used only with EXTRA_LOGS
         (void)kicker;
         (void)reason;
@@ -267,6 +273,7 @@ namespace lfg
 
     void LFGGroupScript::OnDisband(Group* group)
     {
+        std::lock_guard<std::recursive_mutex> guard(sLFGMgr->GetLock());
         if (!sLFGMgr->isOptionEnabled(LFG_OPTION_ENABLE_DUNGEON_FINDER | LFG_OPTION_ENABLE_RAID_BROWSER | LFG_OPTION_ENABLE_SEASONAL_BOSSES))
             return;
 
@@ -282,6 +289,7 @@ namespace lfg
 
     void LFGGroupScript::OnChangeLeader(Group* group, ObjectGuid newLeaderGuid, ObjectGuid oldLeaderGuid)
     {
+        std::lock_guard<std::recursive_mutex> guard(sLFGMgr->GetLock());
         if (!sLFGMgr->isOptionEnabled(LFG_OPTION_ENABLE_DUNGEON_FINDER | LFG_OPTION_ENABLE_RAID_BROWSER | LFG_OPTION_ENABLE_SEASONAL_BOSSES))
             return;
 
@@ -298,6 +306,7 @@ namespace lfg
 
     void LFGGroupScript::OnInviteMember(Group* group, ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(sLFGMgr->GetLock());
         // used only with EXTRA_LOGS
         (void)guid;
 

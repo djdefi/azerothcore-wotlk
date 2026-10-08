@@ -66,6 +66,7 @@ namespace lfg
 
     void LFGMgr::_LoadFromDB(Field* fields, ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (!fields)
             return;
 
@@ -95,6 +96,7 @@ namespace lfg
 
     void LFGMgr::_SaveToDB(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (!guid.IsGroup())
             return;
 
@@ -108,6 +110,7 @@ namespace lfg
     /// Load rewards for completing dungeons
     void LFGMgr::LoadRewards()
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         uint32 oldMSTime = getMSTime();
 
         for (LfgRewardContainer::iterator itr = RewardMapStore.begin(); itr != RewardMapStore.end(); ++itr)
@@ -168,6 +171,7 @@ namespace lfg
 
     void LFGMgr::AddDungeonCooldown(ObjectGuid guid, uint32 dungeonId)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (!sWorld->getIntConfig(CONFIG_LFG_DUNGEON_SELECTION_COOLDOWN))
             return;
 
@@ -176,6 +180,7 @@ namespace lfg
 
     void LFGMgr::CleanupDungeonCooldowns()
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (!sWorld->getIntConfig(CONFIG_LFG_DUNGEON_SELECTION_COOLDOWN))
             return;
 
@@ -200,16 +205,19 @@ namespace lfg
 
     void LFGMgr::ClearDungeonCooldowns()
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         DungeonCooldownStore.clear();
     }
 
     Seconds LFGMgr::GetDungeonCooldownDuration() const
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         return Seconds(sWorld->getIntConfig(CONFIG_LFG_DUNGEON_SELECTION_COOLDOWN) * MINUTE);
     }
 
     LfgDungeonSet LFGMgr::FilterCooldownDungeons(LfgDungeonSet const& dungeons, LfgRolesMap const& players)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (!sWorld->getIntConfig(CONFIG_LFG_DUNGEON_SELECTION_COOLDOWN))
             return dungeons;
 
@@ -249,6 +257,7 @@ namespace lfg
 
     LFGDungeonData const* LFGMgr::GetLFGDungeon(uint32 id)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LFGDungeonContainer::const_iterator itr = LfgDungeonStore.find(id);
         if (itr != LfgDungeonStore.end())
             return &(itr->second);
@@ -258,6 +267,7 @@ namespace lfg
 
     void LFGMgr::LoadLFGDungeons(bool reload /* = false */)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         uint32 oldMSTime = getMSTime();
 
         LfgDungeonStore.clear();
@@ -355,6 +365,7 @@ namespace lfg
 
     void LFGMgr::Update(uint32 tdiff, uint8 task)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (!isOptionEnabled(LFG_OPTION_ENABLE_DUNGEON_FINDER | LFG_OPTION_ENABLE_RAID_BROWSER | LFG_OPTION_ENABLE_SEASONAL_BOSSES))
             return;
 
@@ -479,6 +490,7 @@ namespace lfg
     */
     void LFGMgr::InitializeLockedDungeons(Player* player, Group const* group)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         ObjectGuid guid = player->GetGUID();
 
         uint8 level = player->GetLevel();
@@ -603,6 +615,7 @@ namespace lfg
     */
     void LFGMgr::JoinLfg(Player* player, uint8 roles, LfgDungeonSet& dungeons, std::string const& comment)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (!player || dungeons.empty())
             return;
 
@@ -893,6 +906,7 @@ namespace lfg
 
     void LFGMgr::ToggleTesting()
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (sWorld->getBoolConfig(CONFIG_DEBUG_LFG))
         {
             m_Testing = true;
@@ -913,6 +927,7 @@ namespace lfg
     */
     void LFGMgr::LeaveLfg(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LOG_DEBUG("lfg", "LFGMgr::Leave: [{}]", guid.ToString());
         ObjectGuid gguid = guid.IsGroup() ? guid : GetGroup(guid);
         LfgState state = GetState(guid);
@@ -994,6 +1009,7 @@ namespace lfg
 
     void LFGMgr::JoinRaidBrowser(Player* player, uint8 roles, LfgDungeonSet& dungeons, std::string comment)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         // pussywizard: client limit for comment length is 64 @ 3.3.5a
         if (comment.size() > 64)
             comment = comment.substr(0, 64);
@@ -1009,6 +1025,7 @@ namespace lfg
 
     void LFGMgr::LeaveRaidBrowser(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         for (uint8 team = 0; team < 2; ++team)
             for (RBStoreMap::iterator itr = RaidBrowserStore[team].begin(); itr != RaidBrowserStore[team].end(); ++itr)
                 itr->second.erase(guid);
@@ -1016,6 +1033,7 @@ namespace lfg
 
     void LFGMgr::SendRaidBrowserJoinedPacket(Player* p, LfgDungeonSet& dungeons, std::string comment)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (dungeons.empty())
         {
             RBEntryInfoMap::iterator iter;
@@ -1043,16 +1061,19 @@ namespace lfg
 
     void LFGMgr::LfrSearchAdd(Player* p, uint32 dungeonId)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         RBSearchersStore[p->GetTeamId()][p->GetGUID()] = dungeonId;
     }
 
     void LFGMgr::LfrSearchRemove(Player* p)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         RBSearchersStore[p->GetTeamId()].erase(p->GetGUID());
     }
 
     void LFGMgr::SendRaidBrowserCachedList(Player* player, uint32 dungeonId)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         RBCacheMap::iterator itr = RBCacheStore[player->GetTeamId()].find(dungeonId);
         if (itr != RBCacheStore[player->GetTeamId()].end())
         {
@@ -1073,6 +1094,7 @@ namespace lfg
 
     void LFGMgr::UpdateRaidBrowser(uint32 diff)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         for (uint8 team = 0; team < 2; ++team)
         {
             if (m_raidBrowserUpdateTimer[team] > diff)
@@ -1326,6 +1348,7 @@ namespace lfg
 
     void LFGMgr::RBPacketAppendGroup(RBInternalInfo const& info, ByteBuffer& buffer)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         buffer << info.groupGuid;
         uint32 flags = LFG_UPDATE_FLAG_COMMENT | LFG_UPDATE_FLAG_ROLES | LFG_UPDATE_FLAG_BINDED;
         buffer << (uint32)flags;
@@ -1342,6 +1365,7 @@ namespace lfg
 
     void LFGMgr::RBPacketAppendPlayer(RBInternalInfo const& info, ByteBuffer& buffer)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         buffer << info.guid;
         uint32 flags = LFG_UPDATE_FLAG_CHARACTERINFO | LFG_UPDATE_FLAG_ROLES | LFG_UPDATE_FLAG_COMMENT | (info.groupGuid ? LFG_UPDATE_FLAG_GROUPGUID : LFG_UPDATE_FLAG_BINDED) | (info.isGroupLeader ? LFG_UPDATE_FLAG_GROUPLEADER : 0) | (!info.groupGuid || info.isGroupLeader ? LFG_UPDATE_FLAG_AREA : 0);
         buffer << (uint32)flags;
@@ -1396,6 +1420,7 @@ namespace lfg
 
     void LFGMgr::RBPacketBuildDifference(WorldPacket& differencePacket, uint32 dungeonId, uint32 deletedCounter, ByteBuffer const& bufferDeleted, uint32 groupCounter, ByteBuffer const& bufferGroups, uint32 playerCounter, ByteBuffer const& bufferPlayers)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         differencePacket << (uint32)LFG_TYPE_RAID;
         differencePacket << (uint32)dungeonId;
         differencePacket << (uint8)1;
@@ -1411,6 +1436,7 @@ namespace lfg
 
     void LFGMgr::RBPacketBuildFull(WorldPacket& fullPacket, uint32 dungeonId, RBInternalInfoMap const& infoMap)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         fullPacket << (uint32)LFG_TYPE_RAID;
         fullPacket << (uint32)dungeonId;
         fullPacket << (uint8)0;
@@ -1437,6 +1463,7 @@ namespace lfg
     // pussywizard:
     void LFGMgr::LeaveAllLfgQueues(ObjectGuid guid, bool allowgroup, ObjectGuid groupguid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         ObjectGuid pguid, gguid;
         if (guid.IsGroup())
             gguid = guid;
@@ -1492,6 +1519,7 @@ namespace lfg
     */
     void LFGMgr::UpdateRoleCheck(ObjectGuid gguid, ObjectGuid guid /* = 0 */, uint8 roles /* = PLAYER_ROLE_NONE */)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (!gguid)
             return;
 
@@ -1578,6 +1606,7 @@ namespace lfg
     */
     void LFGMgr::GetCompatibleDungeons(LfgDungeonSet& dungeons, LfgGuidSet const& players, LfgLockPartyMap& lockMap, uint32 randomDungeonId)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         lockMap.clear();
         for (LfgGuidSet::const_iterator it = players.begin(); it != players.end() && !dungeons.empty(); ++it)
         {
@@ -1677,6 +1706,7 @@ namespace lfg
     */
     void LFGMgr::MakeNewGroup(LfgProposal const& proposal)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LfgGuidList players;
         GuidUnorderedSet playersToTeleport;
 
@@ -1910,6 +1940,7 @@ namespace lfg
 
     uint32 LFGMgr::AddProposal(LfgProposal& proposal)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         proposal.id = ++m_lfgProposalId;
         ProposalsStore[m_lfgProposalId] = proposal;
         return m_lfgProposalId;
@@ -1924,6 +1955,7 @@ namespace lfg
     */
     void LFGMgr::UpdateProposal(uint32 proposalId, ObjectGuid guid, bool accept)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         // Check if the proposal exists
         LfgProposalContainer::iterator itProposal = ProposalsStore.find(proposalId);
         if (itProposal == ProposalsStore.end())
@@ -2027,6 +2059,7 @@ namespace lfg
     */
     void LFGMgr::RemoveProposal(LfgProposalContainer::iterator itProposal, LfgUpdateType type)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LfgProposal& proposal = itProposal->second;
         proposal.state = LFG_PROPOSAL_FAILED;
 
@@ -2136,6 +2169,7 @@ namespace lfg
     */
     void LFGMgr::InitBoot(ObjectGuid gguid, ObjectGuid kicker, ObjectGuid victim, std::string const& reason)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         SetState(gguid, LFG_STATE_BOOT);
 
         LfgPlayerBoot& boot = BootsStore[gguid];
@@ -2170,6 +2204,7 @@ namespace lfg
     */
     void LFGMgr::UpdateBoot(ObjectGuid guid, bool accept)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         ObjectGuid gguid = GetGroup(guid);
         if (!gguid)
             return;
@@ -2233,6 +2268,7 @@ namespace lfg
     */
     void LFGMgr::TeleportPlayer(Player* player, bool out, WorldLocation const* teleportLocation /*= nullptr*/)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LFGDungeonData const* dungeon = nullptr;
         Group* group = player->GetGroup();
 
@@ -2323,6 +2359,7 @@ namespace lfg
     */
     void LFGMgr::FinishDungeon(ObjectGuid gguid, const uint32 dungeonId, Map const* currMap)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         uint32 gDungeonId = GetDungeon(gguid);
         if (gDungeonId != dungeonId)
         {
@@ -2440,6 +2477,7 @@ namespace lfg
     */
     LfgDungeonSet const& LFGMgr::GetDungeonsByRandom(uint32 randomdungeon)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LFGDungeonData const* dungeon = GetLFGDungeon(randomdungeon);
         uint32 group = dungeon ? dungeon->group : 0;
         return CachedDungeonMapStore[group];
@@ -2454,6 +2492,7 @@ namespace lfg
     */
     LfgReward const* LFGMgr::GetRandomDungeonReward(uint32 dungeon, uint8 level)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LfgReward const* rew = nullptr;
         LfgRewardContainerBounds bounds = RewardMapStore.equal_range(dungeon & 0x00FFFFFF);
         for (LfgRewardContainer::const_iterator itr = bounds.first; itr != bounds.second; ++itr)
@@ -2475,6 +2514,7 @@ namespace lfg
     */
     LfgType LFGMgr::GetDungeonType(uint32 dungeonId)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LFGDungeonData const* dungeon = GetLFGDungeon(dungeonId);
         if (!dungeon)
             return LFG_TYPE_NONE;
@@ -2484,6 +2524,7 @@ namespace lfg
 
     LfgState LFGMgr::GetState(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LfgState state;
         if (guid.IsGroup())
             state = GroupsStore[guid].GetState();
@@ -2496,6 +2537,7 @@ namespace lfg
 
     LfgState LFGMgr::GetOldState(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LfgState state;
         if (guid.IsGroup())
             state = GroupsStore[guid].GetOldState();
@@ -2508,6 +2550,7 @@ namespace lfg
 
     uint32 LFGMgr::GetDungeon(ObjectGuid guid, bool asId /*= true */)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         uint32 dungeon = GroupsStore[guid].GetDungeon(asId);
         LOG_DEBUG("lfg", "LFGMgr::GetDungeon: [{}] asId: {} = {}", guid.ToString(), asId, dungeon);
         return dungeon;
@@ -2515,6 +2558,7 @@ namespace lfg
 
     uint32 LFGMgr::GetDungeonMapId(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         uint32 dungeonId = GroupsStore[guid].GetDungeon(true);
         uint32 mapId = 0;
         if (dungeonId)
@@ -2527,6 +2571,7 @@ namespace lfg
 
     uint8 LFGMgr::GetRoles(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         uint8 roles = PlayersStore[guid].GetRoles();
         LOG_DEBUG("lfg", "LFGMgr::GetRoles: [{}] = {}", guid.ToString(), roles);
         return roles;
@@ -2534,24 +2579,28 @@ namespace lfg
 
     std::string const& LFGMgr::GetComment(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LOG_DEBUG("lfg", "LFGMgr::GetComment: [{}] = {}", guid.ToString(), PlayersStore[guid].GetComment());
         return PlayersStore[guid].GetComment();
     }
 
     LfgDungeonSet const& LFGMgr::GetSelectedDungeons(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LOG_DEBUG("lfg", "LFGMgr::GetSelectedDungeons: [{}]", guid.ToString());
         return PlayersStore[guid].GetSelectedDungeons();
     }
 
     LfgLockMap const& LFGMgr::GetLockedDungeons(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LOG_DEBUG("lfg", "LFGMgr::GetLockedDungeons: [{}]", guid.ToString());
         return PlayersStore[guid].GetLockedDungeons();
     }
 
     uint8 LFGMgr::GetKicksLeft(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         uint8 kicks = GroupsStore[guid].GetKicksLeft();
         LOG_DEBUG("lfg", "LFGMgr::GetKicksLeft: [{}] = {}", guid.ToString(), kicks);
         return kicks;
@@ -2559,6 +2608,7 @@ namespace lfg
 
     void LFGMgr::RestoreState(ObjectGuid guid, char const*  /*debugMsg*/)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (guid.IsGroup())
         {
             LfgGroupData& data = GroupsStore[guid];
@@ -2588,6 +2638,7 @@ namespace lfg
 
     void LFGMgr::SetState(ObjectGuid guid, LfgState state)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (guid.IsGroup())
         {
             LfgGroupData& data = GroupsStore[guid];
@@ -2610,29 +2661,34 @@ namespace lfg
 
     void LFGMgr::SetCanOverrideRBState(ObjectGuid guid, bool val)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         PlayersStore[guid].SetCanOverrideRBState(val);
     }
 
     void LFGMgr::SetDungeon(ObjectGuid guid, uint32 dungeon)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LOG_DEBUG("lfg", "LFGMgr::SetDungeon: [{}] dungeon {}", guid.ToString(), dungeon);
         GroupsStore[guid].SetDungeon(dungeon);
     }
 
     void LFGMgr::SetRoles(ObjectGuid guid, uint8 roles)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LOG_DEBUG("lfg", "LFGMgr::SetRoles: [{}] roles: {}", guid.ToString(), roles);
         PlayersStore[guid].SetRoles(roles);
     }
 
     void LFGMgr::SetComment(ObjectGuid guid, std::string const& comment)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LOG_DEBUG("lfg", "LFGMgr::SetComment: [{}] comment: {}", guid.ToString(), comment);
         PlayersStore[guid].SetComment(comment);
     }
 
     void LFGMgr::LfrSetComment(Player* p, std::string comment)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         // pussywizard: client limit for comment length is 64 @ 3.3.5a
         if (comment.size() > 64)
             comment = comment.substr(0, 64);
@@ -2646,24 +2702,28 @@ namespace lfg
 
     void LFGMgr::SetSelectedDungeons(ObjectGuid guid, LfgDungeonSet const& dungeons)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LOG_DEBUG("lfg", "LFGMgr::SetLockedDungeons: [{}]", guid.ToString());
         PlayersStore[guid].SetSelectedDungeons(dungeons);
     }
 
     void LFGMgr::SetLockedDungeons(ObjectGuid guid, LfgLockMap const& lock)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LOG_DEBUG("lfg", "LFGMgr::SetLockedDungeons: [{}]", guid.ToString());
         PlayersStore[guid].SetLockedDungeons(lock);
     }
 
     void LFGMgr::DecreaseKicksLeft(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LOG_DEBUG("lfg", "LFGMgr::DecreaseKicksLeft: [{}]", guid.ToString());
         GroupsStore[guid].DecreaseKicksLeft();
     }
 
     void LFGMgr::RemoveGroupData(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LOG_DEBUG("lfg", "LFGMgr::RemoveGroupData: [{}]", guid.ToString());
         LfgGroupDataContainer::iterator it = GroupsStore.find(guid);
         if (it == GroupsStore.end())
@@ -2687,21 +2747,25 @@ namespace lfg
 
     TeamId LFGMgr::GetTeam(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         return PlayersStore[guid].GetTeam();
     }
 
     uint8 LFGMgr::RemovePlayerFromGroup(ObjectGuid gguid, ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         return GroupsStore[gguid].RemovePlayer(guid);
     }
 
     void LFGMgr::AddPlayerToGroup(ObjectGuid gguid, ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         GroupsStore[gguid].AddPlayer(guid);
     }
 
     void LFGMgr::AddPlayerQueuedForRandomDungeonToGroup(ObjectGuid gguid, ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LfgDungeonSet const& dungeons = GetSelectedDungeons(guid);
         if (dungeons.empty())
             return;
@@ -2714,11 +2778,13 @@ namespace lfg
 
     void LFGMgr::SetLeader(ObjectGuid gguid, ObjectGuid leader)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         GroupsStore[gguid].SetLeader(leader);
     }
 
     void LFGMgr::SetTeam(ObjectGuid guid, TeamId teamId)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_GROUP))
             teamId = TEAM_ALLIANCE; // @Not Sure About That TeamId is supposed to be uint8 Team = 0(@TrinityCore)
 
@@ -2727,36 +2793,43 @@ namespace lfg
 
     ObjectGuid LFGMgr::GetGroup(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         return PlayersStore[guid].GetGroup();
     }
 
     void LFGMgr::SetGroup(ObjectGuid guid, ObjectGuid group)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         PlayersStore[guid].SetGroup(group);
     }
 
     LfgGuidSet const& LFGMgr::GetPlayers(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         return GroupsStore[guid].GetPlayers();
     }
 
     uint8 LFGMgr::GetPlayerCount(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         return GroupsStore[guid].GetPlayerCount();
     }
 
     ObjectGuid LFGMgr::GetLeader(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         return GroupsStore[guid].GetLeader();
     }
 
     void LFGMgr::SetRandomPlayersCount(ObjectGuid guid, uint8 count)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         PlayersStore[guid].SetRandomPlayersCount(count);
     }
 
     uint8 LFGMgr::GetRandomPlayersCount(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         return PlayersStore[guid].GetRandomPlayersCount();
     }
 
@@ -2769,42 +2842,49 @@ namespace lfg
 
     void LFGMgr::SendLfgRoleChosen(ObjectGuid guid, ObjectGuid pguid, uint8 roles)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
             player->GetSession()->SendLfgRoleChosen(pguid, roles);
     }
 
     void LFGMgr::SendLfgRoleCheckUpdate(ObjectGuid guid, LfgRoleCheck const& roleCheck)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
             player->GetSession()->SendLfgRoleCheckUpdate(roleCheck);
     }
 
     void LFGMgr::SendLfgUpdatePlayer(ObjectGuid guid, LfgUpdateData const& data)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
             player->GetSession()->SendLfgUpdatePlayer(data);
     }
 
     void LFGMgr::SendLfgUpdateParty(ObjectGuid guid, LfgUpdateData const& data)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
             player->GetSession()->SendLfgUpdateParty(data);
     }
 
     void LFGMgr::SendLfgJoinResult(ObjectGuid guid, LfgJoinResultData const& data)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
             player->GetSession()->SendLfgJoinResult(data);
     }
 
     void LFGMgr::SendLfgBootProposalUpdate(ObjectGuid guid, LfgPlayerBoot const& boot)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
             player->GetSession()->SendLfgBootProposalUpdate(boot);
     }
 
     void LFGMgr::SendLfgUpdateProposal(ObjectGuid guid, LfgProposal const& proposal)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
             player->GetSession()->SendLfgUpdateProposal(proposal);
     }
@@ -2817,11 +2897,13 @@ namespace lfg
 
     bool LFGMgr::IsLfgGroup(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         return guid && guid.IsGroup() && GroupsStore[guid].IsLfgGroup();
     }
 
     LFGQueue& LFGMgr::GetQueue(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         uint8 queueId = 0;
         if (guid.IsGroup())
         {
@@ -2839,6 +2921,7 @@ namespace lfg
 
     bool LFGMgr::AllQueued(Lfg5Guids const& check)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         bool ok = true;
 
         if (check.empty())
@@ -2861,32 +2944,38 @@ namespace lfg
     // Only for debugging purposes
     void LFGMgr::Clean()
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         QueuesStore.clear();
     }
 
     bool LFGMgr::isOptionEnabled(uint32 option)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         return m_options & option;
     }
 
     uint32 LFGMgr::GetOptions()
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         return m_options;
     }
 
     void LFGMgr::SetOptions(uint32 options)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         m_options = options;
     }
 
     LfgUpdateData LFGMgr::GetLfgStatus(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LfgPlayerData& playerData = PlayersStore[guid];
         return LfgUpdateData(LFG_UPDATETYPE_UPDATE_STATUS, playerData.GetState(), playerData.GetSelectedDungeons());
     }
 
     bool LFGMgr::IsSeasonActive(uint32 dungeonId)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         switch (dungeonId)
         {
             case LFG_DUNGEON_HEADLESS_HORSEMAN:
@@ -2903,6 +2992,7 @@ namespace lfg
 
     void LFGMgr::SetupGroupMember(ObjectGuid guid, ObjectGuid gguid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LfgDungeonSet dungeons;
         dungeons.insert(GetDungeon(gguid));
         SetSelectedDungeons(guid, dungeons);
@@ -2913,6 +3003,7 @@ namespace lfg
 
     bool LFGMgr::selectedRandomLfgDungeon(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (GetState(guid) != LFG_STATE_NONE)
         {
             LfgDungeonSet const& dungeons = GetSelectedDungeons(guid);
@@ -2929,6 +3020,7 @@ namespace lfg
 
     bool LFGMgr::inLfgDungeonMap(ObjectGuid guid, uint32 map, Difficulty difficulty)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (!guid.IsGroup())
             guid = GetGroup(guid);
 
@@ -2942,6 +3034,7 @@ namespace lfg
 
     uint32 LFGMgr::GetLFGDungeonEntry(uint32 id)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         if (id)
             if (LFGDungeonData const* dungeon = GetLFGDungeon(id))
                 return dungeon->Entry();
@@ -2951,6 +3044,7 @@ namespace lfg
 
     LfgDungeonSet LFGMgr::GetRandomAndSeasonalDungeons(uint8 level, uint8 expansion)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         LfgDungeonSet randomDungeons;
         for (lfg::LFGDungeonContainer::const_iterator itr = LfgDungeonStore.begin(); itr != LfgDungeonStore.end(); ++itr)
         {
@@ -2964,12 +3058,14 @@ namespace lfg
 
     bool LFGMgr::IsDungeonDisabled(uint32 mapId, Difficulty difficulty) const
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         return sDisableMgr->IsDisabledFor(DISABLE_TYPE_MAP, mapId, nullptr, difficulty) ||
             sDisableMgr->IsDisabledFor(DISABLE_TYPE_LFG_MAP, mapId, nullptr);
     }
 
     bool LFGMgr::IsPlayerQueuedForRandomDungeon(ObjectGuid guid)
     {
+        std::lock_guard<std::recursive_mutex> guard(_lock);
         auto gguid = GetGroup(guid);
         if (!gguid)
             return false;
