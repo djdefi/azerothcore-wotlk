@@ -18,6 +18,7 @@
 #ifndef _LFGMGR_H
 #define _LFGMGR_H
 
+#include <mutex>
 #include <utility>
 
 #include "ByteBuffer.h"
@@ -441,6 +442,11 @@ namespace lfg
     public:
         static LFGMgr* instance();
 
+        // Map-update workers run Update(task 1) while map threads change groups, so every
+        // LFGMgr entry point holds this lock. Recursive: LFG calls back into itself through
+        // group and teleport hooks.
+        std::recursive_mutex& GetLock() const { return _lock; }
+
         // Functions used outside lfg namespace
         void Update(uint32 diff, uint8 task);
 
@@ -647,6 +653,7 @@ namespace lfg
         LfgPlayerDataContainer PlayersStore;               ///< Player data
         LfgGroupDataContainer GroupsStore;                 ///< Group data
         bool m_Testing;
+        mutable std::recursive_mutex _lock;
 
         // Dungeon cooldown system - prevents same dungeon being assigned in a row
         typedef std::unordered_map<uint32 /*dungeonId*/, TimePoint /*completionTime*/> LfgDungeonCooldownMap;
