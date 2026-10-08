@@ -32,6 +32,7 @@
 #include "UnitDefines.h"
 #include "UnitUtils.h"
 #include <boost/container/flat_map.hpp>
+#include <array>
 #include <functional>
 #include <memory>
 #include <utility>
@@ -661,6 +662,56 @@ SpeedOpcodePair SetSpeed2Opc_table[MAX_MOVE_TYPE] =
     {SMSG_FORCE_FLIGHT_SPEED_CHANGE,      SMSG_SPLINE_SET_FLIGHT_SPEED,         MSG_MOVE_SET_FLIGHT_SPEED},
     {SMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE, SMSG_SPLINE_SET_FLIGHT_BACK_SPEED,    MSG_MOVE_SET_FLIGHT_BACK_SPEED},
     {SMSG_FORCE_PITCH_RATE_CHANGE,        SMSG_SPLINE_SET_PITCH_RATE,           MSG_MOVE_SET_PITCH_RATE},
+};
+
+// Aura effects grouped by aura type. A unit used to embed one vector per aura type
+// (TOTAL_AURAS x 24 bytes = 7608 bytes, 62% of a Creature) although a creature usually has
+// none. Only types that have held an effect get a list; each list is heap-allocated and kept
+// for the unit's lifetime, so references returned here stay valid while effects are added
+// or removed, including inside loops that remove auras of the type being iterated.
+class AuraEffectsByType
+{
+public:
+    using List = std::vector<AuraEffect*>;
+
+    [[nodiscard]] List const& operator[](AuraType type) const
+    {
+        if (_index)
+        {
+            uint16 const slot = (*_index)[type];
+            return slot ? *_lists[slot - 1] : Empty;
+        }
+        for (std::size_t i = 0; i < _types.size(); ++i)
+            if (_types[i] == type)
+                return *_lists[i];
+        return Empty;
+    }
+
+    List& Acquire(AuraType type)
+    {
+        if (List const& held = (*this)[type]; &held != &Empty)
+            return const_cast<List&>(held);
+        _types.push_back(static_cast<uint16>(type));
+        _lists.push_back(std::make_unique<List>());
+        if (_index)
+            (*_index)[type] = static_cast<uint16>(_lists.size());
+        else if (_types.size() > IndexAfter)
+        {
+            // Buffed players hold dozens of types; a scan would cost more than the old array.
+            _index = std::make_unique<std::array<uint16, TOTAL_AURAS>>();
+            _index->fill(0);
+            for (std::size_t i = 0; i < _types.size(); ++i)
+                (*_index)[_types[i]] = static_cast<uint16>(i + 1);
+        }
+        return *_lists.back();
+    }
+
+private:
+    static constexpr std::size_t IndexAfter = 4;
+    static inline List const Empty{};
+    std::vector<uint16> _types;
+    std::vector<std::unique_ptr<List>> _lists;
+    std::unique_ptr<std::array<uint16, TOTAL_AURAS>> _index;
 };
 
 class Unit : public WorldObject
@@ -2186,7 +2237,7 @@ protected:
     std::vector<Aura*> m_auraUpdateSnapshot; // _UpdateSpells scratch buffer
     uint32 m_removedAurasCount;
 
-    AuraEffectList m_modAuras[TOTAL_AURAS];
+    AuraEffectsByType m_modAuras;
     AuraList m_scAuras;                        // casted singlecast auras
     AuraApplicationList m_interruptableAuras;  // auras which have interrupt mask applied on unit
     AuraStateAurasMap m_auraStateAuras;        // Used for improve performance of aura state checks on aura apply/remove

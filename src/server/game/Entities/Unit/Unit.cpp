@@ -4707,10 +4707,11 @@ void Unit::_RemoveNoStackAurasDueToAura(Aura* aura, bool owned)
 
 void Unit::_RegisterAuraEffect(AuraEffect* aurEff, bool apply)
 {
+    AuraEffectList& effects = m_modAuras.Acquire(aurEff->GetAuraType());
     if (apply)
-        m_modAuras[aurEff->GetAuraType()].push_back(aurEff);
+        effects.push_back(aurEff);
     else
-        m_modAuras[aurEff->GetAuraType()].erase(std::remove(m_modAuras[aurEff->GetAuraType()].begin(), m_modAuras[aurEff->GetAuraType()].end(), aurEff), m_modAuras[aurEff->GetAuraType()].end());
+        effects.erase(std::remove(effects.begin(), effects.end(), aurEff), effects.end());
 }
 
 // All aura base removes should go threw this function!
@@ -5134,7 +5135,7 @@ void Unit::RemoveAurasByType(AuraType auraType, ObjectGuid casterGUID, Aura* exc
     if (m_modAuras[auraType].empty())
         return;
 
-    for (AuraEffectList::iterator iter = m_modAuras[auraType].begin(); iter != m_modAuras[auraType].end();)
+    for (AuraEffectList::const_iterator iter = m_modAuras[auraType].begin(); iter != m_modAuras[auraType].end();)
     {
         Aura* aura = (*iter)->GetBase();
         AuraApplication* aurApp = aura->GetApplicationOfTarget(GetGUID());
@@ -5888,7 +5889,7 @@ uint32 Unit::GetDiseasesByCaster(ObjectGuid casterGUID, uint8 mode)
     uint32 diseases = 0;
     for (uint8 index = 0; diseaseAuraTypes[index] != SPELL_AURA_NONE; ++index)
     {
-        for (AuraEffectList::iterator i = m_modAuras[diseaseAuraTypes[index]].begin(); i != m_modAuras[diseaseAuraTypes[index]].end();)
+        for (AuraEffectList::const_iterator i = m_modAuras[diseaseAuraTypes[index]].begin(); i != m_modAuras[diseaseAuraTypes[index]].end();)
         {
             // Get auras with disease dispel type by caster
             if ((*i)->GetSpellInfo()->Dispel == DISPEL_DISEASE
@@ -15845,7 +15846,7 @@ private:
 void Unit::CastDelayedSpellWithPeriodicAmount(Unit* caster, uint32 spellId, AuraType auraType, int32 addAmount, uint8 effectIndex)
 {
     AuraEffect* aurEff = nullptr;
-    for (AuraEffectList::iterator i = m_modAuras[auraType].begin(); i != m_modAuras[auraType].end(); ++i)
+    for (AuraEffectList::const_iterator i = m_modAuras[auraType].begin(); i != m_modAuras[auraType].end(); ++i)
     {
         aurEff = *i;
         if (aurEff->GetCasterGUID() != caster->GetGUID() || aurEff->GetId() != spellId || aurEff->GetEffIndex() != effectIndex || !aurEff->GetTotalTicks())
