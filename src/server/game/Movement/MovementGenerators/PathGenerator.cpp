@@ -946,7 +946,7 @@ void PathGenerator::CreateFilter()
     else // assume Player
     {
 #ifdef MOD_PLAYERBOTS
-        // Bots navigate with a stricter filter: include ground + water but exclude lava/slime and
+        // Living bots navigate with a stricter filter: include ground + water but exclude lava/slime and
         // NAV_GROUND_STEEP (the 50-60deg slopes the extractor tags via modAlmostUnwalkableTriangles), so
         // they keep off steep mountainsides and follow gentle ground/roads. Real players are unchanged and
         // may still path across steep terrain.
@@ -980,6 +980,30 @@ void PathGenerator::CreateFilter()
 
 void PathGenerator::UpdateFilter()
 {
+#ifdef MOD_PLAYERBOTS
+    if (Player const* player = _source->ToPlayer(); player && player->GetSession() && player->GetSession()->IsBot())
+    {
+        bool const allowGhostSlime = player->isDead() && player->HasPlayerFlag(PLAYER_FLAGS_GHOST);
+        if (_allowGhostSlime != allowGhostSlime)
+        {
+            _allowGhostSlime = allowGhostSlime;
+            if (allowGhostSlime)
+            {
+                _filter.setIncludeFlags(_filter.getIncludeFlags() | NAV_SLIME);
+                _filter.setExcludeFlags(_filter.getExcludeFlags() & ~NAV_SLIME);
+            }
+            else
+            {
+                _filter.setIncludeFlags(_filter.getIncludeFlags() & ~NAV_SLIME);
+                _filter.setExcludeFlags(_filter.getExcludeFlags() | NAV_SLIME);
+            }
+
+            // A cached ghost corridor must not survive resurrection, or hide a newly accessible route.
+            Clear();
+        }
+    }
+#endif
+
     // allow creatures to cheat and use different movement types if they are moved
     // forcefully into terrain they can't normally move in
     if (Unit const* _sourceUnit = _source->ToUnit())

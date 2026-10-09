@@ -249,17 +249,18 @@ namespace
             EXPECT_TRUE(_ai->Arrivals.empty());
         }
 
-        void CreatePlayer()
+        void CreatePlayer(bool bot = false)
         {
             ScriptRegistry<PlayerScript>::InitEnabledHooksIfNeeded(PLAYERHOOK_END);
             // Like the existing Player fixture, keep a socketless session alive: its destructor writes to the DB.
-            static WorldSession* session = []
+            static WorldSession* sessions[2]{};
+            WorldSession*& session = sessions[bot];
+            if (!session)
             {
-                auto* value = new WorldSession(1, "movement-test", 0, nullptr, SEC_PLAYER,
-                    EXPANSION_WRATH_OF_THE_LICH_KING, 0, LOCALE_enUS, 0, false, false, 0);
-                value->InitRBACDataForTest();
-                return value;
-            }();
+                session = new WorldSession(1, "movement-test", 0, nullptr, SEC_PLAYER,
+                    EXPANSION_WRATH_OF_THE_LICH_KING, 0, LOCALE_enUS, 0, false, false, 0, bot);
+                session->InitRBACDataForTest();
+            }
             _player = std::make_unique<PointPathPlayer>(session);
             _player->InitializeForMovement(_map.get());
             session->SetPlayer(_player.get());
@@ -1317,6 +1318,28 @@ namespace
                 }
             }
             std::vector<unsigned short> flags(polygons.size() / 8, NAV_GROUND);
+            BuildMesh(vertices, polygons, flags, steep);
+        }
+
+        void BuildTerrainBridge(NavTerrain terrain)
+        {
+            // Two ground polygons joined only by the selected terrain.
+            std::vector<unsigned short> vertices{
+                0, 10, 0, 0, 10, 32, 64, 10, 32, 64, 10, 0,
+                0, 10, 64, 64, 10, 64, 0, 10, 128, 64, 10, 128
+            };
+            std::vector<unsigned short> polygons{
+                0, 1, 2, 3, 0xffff, 1, 0xffff, 0xffff,
+                1, 4, 5, 2, 0xffff, 2, 0xffff, 0,
+                4, 6, 7, 5, 0xffff, 0xffff, 0xffff, 1
+            };
+            std::vector<unsigned short> flags{NAV_GROUND, terrain, NAV_GROUND};
+            BuildMesh(vertices, polygons, flags);
+        }
+
+        void BuildMesh(std::vector<unsigned short> const& vertices, std::vector<unsigned short> const& polygons,
+            std::vector<unsigned short> const& flags, bool steep = false)
+        {
             std::vector<unsigned char> areas(flags.size(), 0);
             dtNavMeshCreateParams params{};
             params.verts = vertices.data();
@@ -1386,6 +1409,86 @@ namespace
 
         std::filesystem::path _terrainFile;
     };
+
+#ifdef MOD_PLAYERBOTS
+    TEST_F(PathGeneratorCorridorTest, ReleasedBotGhostSlimePermissionTracksLifeStateAndClearsCachedCorridors)
+    {
+        BuildTerrainBridge(NAV_SLIME);
+        CreatePlayer(true);
+        PathGenerator path(_player.get());
+        PathQueryDiagnostics query;
+        auto expectBlocked = [&]
+        {
+            ASSERT_TRUE(path.CalculatePath(90, 10, 10, false, query));
+            EXPECT_EQ(query.UsedIncludeFlags, NAV_GROUND | NAV_WATER);
+            EXPECT_EQ(query.UsedExcludeFlags, NAV_MAGMA | NAV_SLIME | NAV_GROUND_STEEP);
+            EXPECT_EQ(path.GetPathType(), PATHFIND_INCOMPLETE);
+            EXPECT_EQ(path.GetActualEndPosition(), G3D::Vector3(32, 10, 10));
+        };
+
+        expectBlocked();
+        _player->AddUnitMovementFlag(MOVEMENTFLAG_WATERWALKING);
+        expectBlocked();
+        _player->RemoveUnitMovementFlag(MOVEMENTFLAG_WATERWALKING);
+        _player->SetLifeState(DeathState::Corpse, false);
+        expectBlocked();
+        _player->SetLifeState(DeathState::Alive, true);
+        expectBlocked();
+        _player->SetLifeState(DeathState::JustDied, true);
+        expectBlocked();
+
+        for (DeathState state : {DeathState::Corpse, DeathState::Dead})
+        {
+            _player->SetLifeState(state, true);
+            ASSERT_FALSE(_player->HasUnitMovementFlag(MOVEMENTFLAG_WATERWALKING));
+            ASSERT_TRUE(path.CalculatePath(90, 10, 10, false, query));
+            EXPECT_EQ(query.UsedIncludeFlags, NAV_GROUND | NAV_WATER | NAV_SLIME);
+            EXPECT_EQ(query.UsedExcludeFlags, NAV_MAGMA | NAV_GROUND_STEEP);
+            EXPECT_EQ(path.GetPathType(), PATHFIND_NORMAL);
+            EXPECT_EQ(path.GetActualEndPosition(), G3D::Vector3(90, 10, 10));
+        }
+        EXPECT_EQ(query.CorridorStage.Mode, PathQueryDiagnostics::CorridorMode::Reused);
+
+        _player->SetLifeState(DeathState::Alive, false);
+        expectBlocked();
+        EXPECT_EQ(query.StartPolygon.CachedPolyCount, 0u);
+        EXPECT_EQ(query.EndPolygon.CachedPolyCount, 0u);
+    }
+
+    TEST_F(PathGeneratorCorridorTest, ReleasedBotGhostKeepsMagmaAndSteepTerrainExcluded)
+    {
+        CreatePlayer(true);
+        _player->SetLifeState(DeathState::Corpse, true);
+        for (NavTerrain terrain : {NAV_MAGMA, NAV_GROUND_STEEP})
+        {
+            SCOPED_TRACE(terrain);
+            BuildTerrainBridge(terrain);
+            PathGenerator path(_player.get());
+            PathQueryDiagnostics query;
+            ASSERT_TRUE(path.CalculatePath(90, 10, 10, false, query));
+            EXPECT_EQ(query.UsedExcludeFlags, NAV_MAGMA | NAV_GROUND_STEEP);
+            EXPECT_EQ(path.GetPathType(), PATHFIND_INCOMPLETE);
+            EXPECT_EQ(path.GetActualEndPosition(), G3D::Vector3(32, 10, 10));
+        }
+    }
+
+    TEST_F(PathGeneratorCorridorTest, GhostSlimePermissionDoesNotChangeNonBotFilters)
+    {
+        BuildTerrainBridge(NAV_SLIME);
+        CreatePlayer();
+        _player->SetLifeState(DeathState::Corpse, true);
+        for (Unit* unit : {static_cast<Unit*>(_player.get()), static_cast<Unit*>(_unit.get())})
+        {
+            PathGenerator path(unit);
+            PathQueryDiagnostics query;
+            ASSERT_TRUE(path.CalculatePath(90, 10, 10, false, query));
+            EXPECT_EQ(query.UsedIncludeFlags & NAV_SLIME, 0);
+            EXPECT_EQ(query.UsedExcludeFlags, 0);
+            EXPECT_EQ(path.GetPathType(), PATHFIND_INCOMPLETE);
+            EXPECT_EQ(path.GetActualEndPosition(), G3D::Vector3(32, 10, 10));
+        }
+    }
+#endif
 
     TEST_F(PathGeneratorCorridorTest, DisconnectedOnePolygonSmoothPathEndsAtReachableBoundary)
     {
