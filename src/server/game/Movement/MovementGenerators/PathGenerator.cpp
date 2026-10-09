@@ -823,6 +823,7 @@ void PathGenerator::BuildPointPath(float const* startPoint, float const* endPoin
     }
     // A successful partial query may have no progress beyond its one reachable point.
     bool const partialNoProgress = pointCount == 1 && dtStatusSucceed(dtResult) && (_type & PATHFIND_INCOMPLETE);
+    bool const partialSmoothPrefix = !_useStraightPath && dtResult == (DT_SUCCESS | DT_BUFFER_TOO_SMALL);
 
     // Special case with reachable start and end positions very close to each other.
     if (_polyLength == 1 && pointCount == 1 && dtResult == DT_SUCCESS &&
@@ -859,7 +860,7 @@ void PathGenerator::BuildPointPath(float const* startPoint, float const* endPoin
         return;
     }
     else if (RecordPathCheck(diagnostics ? &diagnostics->PointStage.LimitReached : nullptr,
-        pointCount >= _pointPathLimit) && !partialNoProgress)
+        pointCount >= _pointPathLimit) && !partialNoProgress && !partialSmoothPrefix)
     {
         BuildShortcut();
         _type = PathType(_type | PATHFIND_SHORT);
@@ -1298,8 +1299,22 @@ dtStatus PathGenerator::FindSmoothPath(float const* startPos, float const* endPo
 
     *smoothPathSize = nsmoothPath;
 
-    // this is most likely a loop
-    return nsmoothPath < MAX_POINT_PATH_LENGTH ? DT_SUCCESS : DT_FAILURE;
+    if (nsmoothPath < MAX_POINT_PATH_LENGTH)
+        return DT_SUCCESS;
+
+    // Retain an exhausted partial corridor only after advancing through it, without a looping tail.
+    if (!_forceDestination && maxSmoothPathSize == MAX_POINT_PATH_LENGTH &&
+        (_type & PATHFIND_INCOMPLETE) && npolys && npolys < polyPathSize)
+    {
+        float const* last = &smoothPath[(nsmoothPath - 1) * VERTEX_SIZE];
+        for (uint32 i = 0; i + 1 < nsmoothPath; ++i)
+            if (InRangeYZX(&smoothPath[i * VERTEX_SIZE], last, SMOOTH_PATH_SLOP, 1.0f))
+                return DT_FAILURE;
+
+        return DT_SUCCESS | DT_BUFFER_TOO_SMALL;
+    }
+
+    return DT_FAILURE;
 }
 
 bool PathGenerator::IsWalkableClimb(float const* v1, float const* v2) const
