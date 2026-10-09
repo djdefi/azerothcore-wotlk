@@ -1289,7 +1289,7 @@ namespace
             std::filesystem::remove(_terrainFile);
         }
 
-        void BuildIslands(bool connectedPrefix = false, bool steep = false)
+        void BuildIslands(bool connectedPrefix = false, bool steep = false, uint32 lengthScale = 1)
         {
             // Detour YZX coordinates: ground X=[0,64] and X=[80,128], separated by an unwalkable gap.
             std::vector<unsigned short> vertices{
@@ -1317,8 +1317,10 @@ namespace
                     vertices[5 * 3 + 1] = 100;
                 }
             }
+            for (std::size_t i = 2; i < vertices.size(); i += 3)
+                vertices[i] *= lengthScale;
             std::vector<unsigned short> flags(polygons.size() / 8, NAV_GROUND);
-            BuildMesh(vertices, polygons, flags, steep);
+            BuildMesh(vertices, polygons, flags, steep, 128.0f * lengthScale);
         }
 
         void BuildTerrainBridge(NavTerrain terrain)
@@ -1338,7 +1340,7 @@ namespace
         }
 
         void BuildMesh(std::vector<unsigned short> const& vertices, std::vector<unsigned short> const& polygons,
-            std::vector<unsigned short> const& flags, bool steep = false)
+            std::vector<unsigned short> const& flags, bool steep = false, float length = 128.0f)
         {
             std::vector<unsigned char> areas(flags.size(), 0);
             dtNavMeshCreateParams params{};
@@ -1351,7 +1353,7 @@ namespace
             params.nvp = 4;
             params.bmax[0] = 64.0f;
             params.bmax[1] = steep ? 110.0f : 20.0f;
-            params.bmax[2] = 128.0f;
+            params.bmax[2] = length;
             params.walkableHeight = 2.0f;
             params.walkableRadius = 0.5f;
             params.walkableClimb = 1.0f;
@@ -1364,7 +1366,7 @@ namespace
             std::shared_ptr<dtNavMesh> mesh(dtAllocNavMesh(), MMAP::NavMeshDeleter{});
             ASSERT_NE(mesh, nullptr);
             dtNavMeshParams meshParams{};
-            meshParams.tileWidth = meshParams.tileHeight = 128.0f;
+            meshParams.tileWidth = meshParams.tileHeight = length;
             meshParams.maxTiles = 1;
             meshParams.maxPolys = 4;
             ASSERT_TRUE(dtStatusSucceed(mesh->init(&meshParams)));
@@ -1529,6 +1531,72 @@ namespace
         PathGenerator path(_unit.get());
         ASSERT_TRUE(path.CalculatePath(90, 10, 10, false));
         ExpectPartialPrefix(path, 2);
+    }
+
+    TEST_F(PathGeneratorCorridorTest, DefaultLimitedPartialSmoothPathRetainsItsAdvancingPrefix)
+    {
+        uint32 const scale = MAX_POINT_PATH_LENGTH / 9;
+        BuildIslands(true, false, scale);
+        PathGenerator path(_unit.get());
+        PathQueryDiagnostics query;
+        ASSERT_TRUE(path.CalculatePath(90.0f * scale, 10, 10, false, query));
+        EXPECT_EQ(query.PointStage.Status, DT_SUCCESS | DT_BUFFER_TOO_SMALL);
+        EXPECT_EQ(query.PointStage.LimitReached, PathQueryDiagnostics::Check::Yes);
+        EXPECT_EQ(path.GetPathType(), PATHFIND_INCOMPLETE);
+        ASSERT_EQ(path.GetPath().size(), uint32(MAX_POINT_PATH_LENGTH));
+        EXPECT_EQ(path.GetPath().front(), G3D::Vector3(10, 10, 10));
+        EXPECT_GT(path.GetActualEndPosition().x, 32.0f * scale);
+        EXPECT_LT(path.GetActualEndPosition().x, 64.0f * scale);
+        EXPECT_EQ(path.GetActualEndPosition(), path.GetPath().back());
+        EXPECT_EQ(path.GetEndPosition(), G3D::Vector3(90.0f * scale, 10, 10));
+        ASSERT_TRUE(Dispatch(path.GetPath()));
+
+        ResetPathSource(path.GetActualEndPosition());
+        ASSERT_TRUE(path.CalculatePath(90.0f * scale, 10, 10, false, query));
+        EXPECT_EQ(path.GetPathType(), PATHFIND_INCOMPLETE);
+        EXPECT_FLOAT_EQ(path.GetActualEndPosition().x, 64.0f * scale);
+        EXPECT_EQ(path.GetActualEndPosition(), path.GetPath().back());
+    }
+
+    TEST_F(PathGeneratorCorridorTest, PartialSmoothPrefixDoesNotChangeExplicitLimitsOrForcedAndCompletePaths)
+    {
+        uint32 const scale = MAX_POINT_PATH_LENGTH / 9;
+        BuildIslands(true, false, scale);
+        PathGenerator limited(_unit.get());
+        limited.SetPathLengthLimit(32.0f);
+        ASSERT_TRUE(limited.CalculatePath(90.0f * scale, 10, 10));
+        EXPECT_NE(limited.GetPathType() & PATHFIND_SHORT, 0);
+        EXPECT_NE(limited.GetPathType() & PATHFIND_SHORTCUT, 0);
+        EXPECT_EQ(limited.GetPath().size(), 2u);
+
+        for (bool force : {false, true})
+        {
+            PathGenerator path(_unit.get());
+            PathQueryDiagnostics query;
+            ASSERT_TRUE(path.CalculatePath((force ? 90.0f : 60.0f) * scale, 10, 10, force, query));
+            EXPECT_TRUE(dtStatusFailed(query.PointStage.Status));
+            EXPECT_NE(path.GetPathType() & PATHFIND_NOPATH, 0);
+            EXPECT_EQ(path.GetPath().size(), 2u);
+        }
+
+        PathGenerator straight(_unit.get());
+        straight.SetUseStraightPath(true);
+        PathQueryDiagnostics query;
+        ASSERT_TRUE(straight.CalculatePath(90.0f * scale, 10, 10, false, query));
+        EXPECT_EQ(query.PointStage.Status, DT_SUCCESS);
+        EXPECT_EQ(straight.GetPathType(), PATHFIND_INCOMPLETE);
+        EXPECT_FLOAT_EQ(straight.GetActualEndPosition().x, 64.0f * scale);
+    }
+
+    TEST_F(PathGeneratorCorridorTest, ExhaustedPartialSmoothPathWithoutCorridorProgressStillFails)
+    {
+        BuildIslands(false, false, MAX_POINT_PATH_LENGTH / 9);
+        PathGenerator path(_unit.get());
+        PathQueryDiagnostics query;
+        ASSERT_TRUE(path.CalculatePath(90.0f * (MAX_POINT_PATH_LENGTH / 9), 10, 10, false, query));
+        EXPECT_TRUE(dtStatusFailed(query.PointStage.Status));
+        EXPECT_NE(path.GetPathType() & PATHFIND_NOPATH, 0);
+        EXPECT_EQ(path.GetPath().size(), 2u);
     }
 
     TEST_F(PathGeneratorCorridorTest, CompleteShortOnePolygonPathKeepsItsExactDestination)
