@@ -154,6 +154,13 @@ void ScriptMgr::Initialize()
 
 void ScriptMgr::Unload()
 {
+    // Late singleton destructors still dispatch hooks; retain the slots, not their script pointers.
+    Acore::for_each<ScriptRegistryTypes>([]<typename Info>()
+    {
+        for (auto& hooks : ScriptRegistry<typename Info::type>::EnabledHooks)
+            hooks.clear();
+    });
+
     Acore::for_each<ScriptRegistryTypes>([]<typename Info>()
     {
         for (auto const& [scriptID, script] : ScriptRegistry<typename Info::type>::ScriptPointerList)
