@@ -104,6 +104,18 @@ public:
         }
     }
 
+    // A wipe resets DATA_BUG_TRIO_DEATH while devoured bugs can stay dead, so
+    // the counter cannot tell whether this bug is the last one standing.
+    uint8 OtherBugsAlive()
+    {
+        uint8 alive = 0;
+        for (uint32 data : { DATA_VEM, DATA_KRI, DATA_YAUJ })
+            if (Creature* bug = instance->GetCreature(data))
+                if (bug->GetGUID() != me->GetGUID() && bug->IsAlive())
+                    ++alive;
+        return alive;
+    }
+
     void EvadeAllBosses(EvadeReason why)
     {
         if (Creature* vem = instance->GetCreature(DATA_VEM))
@@ -225,7 +237,7 @@ public:
         if (_dying && who && who->GetGUID() != me->GetGUID())
             damage = 0;
 
-        if (me->HealthBelowPctDamaged(0, damage) && instance->GetData(DATA_BUG_TRIO_DEATH) < 2 && !_dying)
+        if (me->HealthBelowPctDamaged(0, damage) && !_dying && OtherBugsAlive() > 0)
         {
             damage = 0;
             if (_isEating)
@@ -305,7 +317,7 @@ public:
     void JustDied(Unit* killer) override
     {
         instance->SetData(DATA_BUG_TRIO_DEATH, 1);
-        if (instance->GetData(DATA_BUG_TRIO_DEATH) < 3)
+        if (OtherBugsAlive() > 0)
         {
             me->RemoveDynamicFlag(UNIT_DYNFLAG_LOOTABLE);
             DoFinalSpell();
@@ -393,7 +405,7 @@ struct boss_vem : public boss_bug_trio
         })
         .Schedule(1s, [this](TaskContext context)
         {
-            if (instance->GetData(DATA_BUG_TRIO_DEATH) == 2 && !me->HasAura(SPELL_VENGEANCE)) // Vem is the only one left.
+            if (OtherBugsAlive() == 0 && !me->HasAura(SPELL_VENGEANCE)) // Vem is the only one left.
             {
                 DoCastSelf(SPELL_VENGEANCE, true);
             }
