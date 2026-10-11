@@ -108,8 +108,9 @@ public:
     // the counter cannot tell whether this bug is the last one standing.
     uint8 OtherBugsAlive()
     {
+        uint32 const bugs[] = { DATA_VEM, DATA_KRI, DATA_YAUJ };
         uint8 alive = 0;
-        for (uint32 data : { DATA_VEM, DATA_KRI, DATA_YAUJ })
+        for (uint32 data : bugs)
             if (Creature* bug = instance->GetCreature(data))
                 if (bug->GetGUID() != me->GetGUID() && bug->IsAlive())
                     ++alive;
