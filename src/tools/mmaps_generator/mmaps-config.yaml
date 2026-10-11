@@ -124,6 +124,13 @@ mmapsConfig:
     # All parameters defined globally are eligible for override.
     # Just specify the parameter name and new value in the override section.
     mapsOverrides:
+      "1": # Kalimdor
+        tilesOverrides:
+          "33,35": # The Barrens, druid cave above Wailing Caverns
+            # cave mouth is a ~1 yd wide trench, default radius erodes it shut and cuts off the cave floor
+            # (Nalpak, Ebru, Kalldan Felmoon, Waldor)
+            walkableRadius: 0
+
       "48": # Blackfathom Deeps
         cellSizeVertical: 0.5334 # ch*2 = 0.2667 * 2 ≈ 0.5334. Reduce the chance to have underground levels.
 
