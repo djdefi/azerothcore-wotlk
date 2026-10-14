@@ -114,9 +114,9 @@ namespace lfg
     void LFGQueue::RemoveQueueData(ObjectGuid guid)
     {
         LOG_DEBUG("lfg", "LEFT RemoveQueueData: {}", guid.ToString());
-        LfgQueueDataContainer::iterator it = QueueDataStore.find(guid);
-        if (it != QueueDataStore.end())
-            QueueDataStore.erase(it);
+        // UpdateQueueTimers can re-add a guid while its proposal is pending (its data is kept by the
+        // partial remove), so drop every reference along with the data or it stays listed as queued.
+        RemoveFromQueue(guid);
     }
 
     void LFGQueue::UpdateWaitTimeAvg(int32 waitTime, uint32 dungeonId)
@@ -203,6 +203,15 @@ namespace lfg
         uint32 foundCount = 0;
 
         LOG_DEBUG("lfg", "FIND NEW GROUPS for: {}", newGuid.ToString());
+
+        // Checking a guid without queue data against every compatible fails each time, rescanning the
+        // whole queue and logging per entry, which stalls the update thread.
+        if (QueueDataStore.find(newGuid) == QueueDataStore.end())
+        {
+            LOG_ERROR("lfg", "LFGQueue::FindNewGroups: [{}] is not queued but listed as queued!", newGuid.ToString());
+            RemoveFromQueue(newGuid);
+            return LFG_COMPATIBILITY_PENDING;
+        }
 
         // we have to take into account that FindNewGroups is called every X minutes if number of compatibles is low!
         // build set of already present compatibles for this guid
