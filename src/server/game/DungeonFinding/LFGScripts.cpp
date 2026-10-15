@@ -280,6 +280,11 @@ namespace lfg
         ObjectGuid gguid = group->GetGUID();
         LOG_DEBUG("lfg", "LFGScripts::OnDisband [{}]", gguid.ToString());
 
+        // Dequeue while the group's members still resolve its faction queue;
+        // RemoveGroupData below would leave the group stranded in it.
+        if (sLFGMgr->GetState(gguid) == LFG_STATE_QUEUED)
+            sLFGMgr->LeaveLfg(gguid);
+
         // pussywizard: after all necessary actions handle raid browser
         if (sLFGMgr->GetState(group->GetLeaderGUID()) == LFG_STATE_RAIDBROWSER)
             sLFGMgr->LeaveLfg(group->GetLeaderGUID());
