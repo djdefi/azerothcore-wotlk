@@ -246,6 +246,10 @@ namespace lfg
             LfgCompatibility compatibility = CheckCompatibility(*itr, newGuid, foundMask, foundCount, currentCompatibles);
             if (compatibility == LFG_COMPATIBLES_MATCH)
                 return LFG_COMPATIBLES_MATCH;
+            // AllQueued drops a guid that is no longer queued, data included; checking it against the
+            // rest of the list would fail, rescan the queue and log once per remaining entry.
+            if (compatibility == LFG_COMPATIBILITY_PENDING && QueueDataStore.find(newGuid) == QueueDataStore.end())
+                return LFG_COMPATIBILITY_PENDING;
             if ((foundMask & 0x3FFF3FFF3FFF3FFF) == 0x3FFF3FFF3FFF3FFF) // each combination of dps+heal+tank already found 4 times
                 break;
         }
