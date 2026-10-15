@@ -2932,8 +2932,10 @@ namespace lfg
             ObjectGuid guid = check.guids[i];
             if (GetState(guid) != LFG_STATE_QUEUED)
             {
-                LFGQueue& queue = GetQueue(guid);
-                queue.RemoveFromQueue(guid);
+                // A disbanded group no longer resolves its team, so GetQueue
+                // would pick the wrong queue; remove it from every queue.
+                for (auto& queue : QueuesStore)
+                    queue.second.RemoveFromQueue(guid);
                 ok = false;
             }
         }
