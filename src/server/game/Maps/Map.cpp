@@ -739,6 +739,10 @@ struct ResetNotifier
 
 void Map::RemovePlayerFromMap(Player* player, bool remove)
 {
+    // Map-specific leave callbacks may resurrect the player before final cleanup.
+    if (remove)
+        player->CleanupsBeforeDelete();
+
     UpdatePlayerZoneStats(player->GetZoneId(), MAP_INVALID_ZONE);
 
     player->GetThreatMgr().RemoveMeFromThreatLists(); // pussywizard: multithreading crashfix

@@ -870,12 +870,13 @@ void WorldSession::LogoutPlayer(bool save, bool redirecting)
         // the player may not be in the world when logging out
         // e.g if he got disconnected during a transfer to another map
         // calls to GetMap in this case may cause crashes
-        _player->CleanupsBeforeDelete();
         if (Map* _map = _player->FindMap())
         {
             _map->RemovePlayerFromMap(_player, true);
             _map->AfterPlayerUnlinkFromMap();
         }
+        else
+            _player->CleanupsBeforeDelete();
 
         SetPlayer(nullptr); // pointer already deleted
 
