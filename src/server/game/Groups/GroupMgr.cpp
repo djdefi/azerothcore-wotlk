@@ -112,8 +112,9 @@ void GroupMgr::LoadGroups()
         // Delete all groups with less than 2 members
         CharacterDatabase.DirectExecute("DELETE FROM `groups` WHERE guid NOT IN (SELECT guid FROM group_member GROUP BY guid HAVING COUNT(guid) > 1)");
 
-        // Delete invalid lfg_data
-        CharacterDatabase.DirectExecute("DELETE lfg_data FROM lfg_data LEFT JOIN `groups` ON lfg_data.guid = groups.guid WHERE groups.guid IS NULL OR groups.groupType <> 12");
+        // Delete invalid lfg_data. A premade party that queued together is an LFG group without
+        // GROUPTYPE_LFG_RESTRICTED (ConvertToLFG(false), groupType 8), and still owns its dungeon.
+        CharacterDatabase.DirectExecute("DELETE lfg_data FROM lfg_data LEFT JOIN `groups` ON lfg_data.guid = groups.guid WHERE groups.guid IS NULL OR (groups.groupType & 8) = 0");
         // CharacterDatabase.DirectExecute("DELETE `groups` FROM `groups` LEFT JOIN lfg_data ON groups.guid = lfg_data.guid WHERE groups.groupType=12 AND lfg_data.guid IS NULL"); // group should be left so binds are cleared when disbanded
 
         InitGroupIds();
