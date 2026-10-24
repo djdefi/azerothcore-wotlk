@@ -6303,6 +6303,7 @@ bool Player::RewardHonor(Unit* uVictim, uint32 groupsize, int32 honor, bool awar
 
     ObjectGuid victim_guid;
     int32 victim_rank = 0;
+    bool honorableKill = false;
 
     // need call before fields update to have chance move yesterday data to appropriate fields before today data change.
     UpdateHonorFields();
@@ -6347,6 +6348,7 @@ bool Player::RewardHonor(Unit* uVictim, uint32 groupsize, int32 honor, bool awar
             ApplyModUInt32Value(PLAYER_FIELD_KILLS, 1, true);
             // and those in a lifetime
             ApplyModUInt32Value(PLAYER_FIELD_LIFETIME_HONORABLE_KILLS, 1, true);
+            honorableKill = true;
             UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_EARN_HONORABLE_KILL);
             UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_HK_CLASS, victim->getClass());
             UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_HK_RACE, victim->getRace(true));
@@ -6377,6 +6379,8 @@ bool Player::RewardHonor(Unit* uVictim, uint32 groupsize, int32 honor, bool awar
     honor_f *= sWorld->getRate(RATE_HONOR);
     // Back to int now
     honor = int32(honor_f);
+    sScriptMgr->OnPlayerAfterRewardHonor(this, uVictim, groupsize, honor, honorableKill);
+
     // honor - for show honor points in log
     // victim_guid - for show victim name in log
     // victim_rank [1..4]  HK: <dishonored rank>

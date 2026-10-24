@@ -142,6 +142,12 @@ void ScriptMgr::OnPlayerGiveXP(Player* player, uint32& amount, Unit* victim, uin
     CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_GIVE_EXP, script->OnPlayerGiveXP(player, amount, victim, xpSource));
 }
 
+void ScriptMgr::OnPlayerAfterRewardHonor(Player* player, Unit* victim, uint32 groupSize, int32 honor, bool honorableKill)
+{
+    CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_AFTER_REWARD_HONOR,
+        script->OnPlayerAfterRewardHonor(player, victim, groupSize, honor, honorableKill));
+}
+
 bool ScriptMgr::OnPlayerReputationChange(Player* player, uint32 factionID, int32& standing, bool incremental)
 {
     CALL_ENABLED_BOOLEAN_HOOKS(PlayerScript, PLAYERHOOK_ON_REPUTATION_CHANGE, !script->OnPlayerReputationChange(player, factionID, standing, incremental));
