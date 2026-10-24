@@ -237,6 +237,7 @@ enum PlayerHook
     PLAYERHOOK_ON_BEFORE_RECEIVE_SPELL_LIST_FROM_TRAINER,
     PLAYERHOOK_ON_GET_TRAINER_SPELL_STATE,
     PLAYERHOOK_ON_AFTER_TRAIN_SPELL,
+    PLAYERHOOK_ON_AFTER_REWARD_HONOR,
     PLAYERHOOK_END
 };
 
@@ -310,6 +311,11 @@ public:
 
     // Called when a player gains XP (before anything is given)
     virtual void OnPlayerGiveXP(Player* /*player*/, uint32& /*amount*/, Unit* /*victim*/, uint8 /*xpSource*/) { }
+
+    // Called after honor calculation, before currency caps and contribution updates, including zero awards.
+    // honorableKill is true only when this award increments the native player honorable-kill counters.
+    virtual void OnPlayerAfterRewardHonor(Player* /*player*/, Unit* /*victim*/, uint32 /*groupSize*/,
+        int32 /*honor*/, bool /*honorableKill*/) { }
 
     // Called when a player's reputation changes (before it is actually changed)
     virtual bool OnPlayerReputationChange(Player* /*player*/, uint32 /*factionID*/, int32& /*standing*/, bool /*incremental*/) { return true; }
