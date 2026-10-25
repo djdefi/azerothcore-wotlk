@@ -34,7 +34,6 @@
 #include "GuildMgr.h"
 #include "InstanceSaveMgr.h"
 #include "Language.h"
-#include "LFGMgr.h"
 #include "Log.h"
 #include "MapMgr.h"
 #include "Metric.h"
@@ -909,21 +908,8 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     // Xinef: moved this from below
     ObjectAccessor::AddObject(pCurrChar);
 
-    bool const addedToMap = pCurrChar->GetMap()->AddPlayerToMap(pCurrChar);
-    if (!addedToMap || !pCurrChar->CheckInstanceLoginValid())
+    if (!pCurrChar->GetMap()->AddPlayerToMap(pCurrChar) || !pCurrChar->CheckInstanceLoginValid())
     {
-        // LAL: temporary, operator-approved 2026-10-24; remove once the restart login-rejection path is fixed.
-        if (pCurrChar->GetMap()->IsDungeon())
-        {
-            Group* group = pCurrChar->GetGroup();
-            LOG_INFO("server", "event=login_instance_rejected guid={} map={} instance={} check={} group={} lfg={} lfg_map_ok={} map_enter={} mgr_enter={}",
-                pCurrChar->GetGUID().GetCounter(), pCurrChar->GetMapId(), pCurrChar->GetInstanceId(),
-                addedToMap ? "CheckInstanceLoginValid" : "AddPlayerToMap", group ? group->GetGUID().GetCounter() : 0,
-                group && group->isLFGGroup(),
-                group && group->isLFGGroup() && sLFGMgr->inLfgDungeonMap(group->GetGUID(), pCurrChar->GetMapId(), pCurrChar->GetMap()->GetDifficulty()),
-                addedToMap ? int(pCurrChar->GetMap()->CannotEnter(pCurrChar, true)) : -1,
-                addedToMap ? int(sMapMgr->PlayerCannotEnter(pCurrChar->GetMapId(), pCurrChar, true)) : -1);
-        }
         AreaTriggerTeleport const* at = sObjectMgr->GetGoBackTrigger(pCurrChar->GetMapId());
         if (at)
             pCurrChar->TeleportTo(at->target_mapId, at->target_X, at->target_Y, at->target_Z, pCurrChar->GetOrientation());
