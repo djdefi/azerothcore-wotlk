@@ -23,6 +23,7 @@
 #include "Log.h"
 #include "Mail.h"
 #include "ObjectAccessor.h"
+#include "ScriptMgr.h"
 #include "Timer.h"
 #include <map>
 
@@ -112,17 +113,22 @@ void MailMgr::ReturnOrDeleteOldMails(bool serverUp)
     do
     {
         Field* fields = result->Fetch();
-        Mail* m = new Mail;
+        Mail* m = new Mail{};
         m->messageID      = fields[0].Get<uint32>();
         m->messageType    = fields[1].Get<uint8>();
         m->sender         = fields[2].Get<uint32>();
         m->receiver       = fields[3].Get<uint32>();
         bool has_items    = fields[4].Get<bool>();
         m->expire_time    = time_t(fields[5].Get<uint32>());
-        m->deliver_time   = time_t(0);
         m->stationery     = fields[6].Get<uint8>();
         m->checked        = fields[7].Get<uint8>();
         m->mailTemplateId = fields[8].Get<int16>();
+        m->subject        = fields[9].Get<std::string>();
+        m->body           = fields[10].Get<std::string>();
+        m->money          = fields[11].Get<uint32>();
+        m->COD            = fields[12].Get<uint32>();
+        m->deliver_time   = time_t(fields[13].Get<uint32>());
+        m->state          = MAIL_STATE_UNCHANGED;
 
         Player* player = nullptr;
         if (serverUp)
@@ -134,15 +140,19 @@ void MailMgr::ReturnOrDeleteOldMails(bool serverUp)
             continue;
         }
 
+        m->items.swap(itemsCache[m->messageID]);
+        if (!sScriptMgr->CanMailExpire(m))
+        {
+            delete m;
+            continue;
+        }
+
         // Keep each mail's correlated writes atomic
         CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 
         // Delete or return mail
         if (has_items)
         {
-            // read items from cache
-            m->items.swap(itemsCache[m->messageID]);
-
             // If it is mail from non-player, or if it's already return mail, it shouldn't be returned, but deleted
             if (!m->IsSentByPlayer() || m->IsSentByGM() || (m->IsCODPayment() || m->IsReturnedMail()))
             {
@@ -159,6 +169,13 @@ void MailMgr::ReturnOrDeleteOldMails(bool serverUp)
             }
             else
             {
+                if (!sScriptMgr->CanMailTransfer(ObjectGuid(HighGuid::Player, m->receiver),
+                    ObjectGuid(HighGuid::Player, m->sender)))
+                {
+                    delete m;
+                    continue;
+                }
+
                 // Mail will be returned
                 stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_MAIL_RETURNED);
                 stmt->SetData(0, m->receiver);

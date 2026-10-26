@@ -18,6 +18,16 @@
 #include "ScriptMgr.h"
 #include "ScriptMgrMacros.h"
 
+bool ScriptMgr::OnPlayerbotCanLFGMatch(lfg::Lfg5Guids const& guidsList)
+{
+    auto ret = IsValidBoolScript<PlayerbotScript>([&](PlayerbotScript* script)
+    {
+        return !script->OnPlayerbotCanLFGMatch(guidsList);
+    });
+
+    return !(ret && *ret);
+}
+
 bool ScriptMgr::OnPlayerbotCheckLFGQueue(lfg::Lfg5Guids const& guidsList)
 {
     auto ret = IsValidBoolScript<PlayerbotScript>([&](PlayerbotScript* script)

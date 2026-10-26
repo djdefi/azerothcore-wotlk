@@ -255,14 +255,14 @@ int32 Quest::GetRewOrReqMoney(uint8 playerLevel) const
     return static_cast<int32>(rewardedMoney * sWorld->getRate(RATE_REWARD_QUEST_MONEY));
 }
 
-uint32 Quest::GetRewMoneyMaxLevel() const
+uint32 Quest::GetRewMoneyMaxLevel(uint8 maxLevel) const
 {
     uint32 rewMoney = 0;
 
     if (HasFlag(QUEST_FLAGS_NO_MONEY_FROM_XP))
         return rewMoney;
 
-    rewMoney = (XPValue(sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL)) * (6 * COPPER));
+    rewMoney = (XPValue(maxLevel ? maxLevel : sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL)) * (6 * COPPER));
     // https://wowpedia.fandom.com/wiki/Quest?oldid=1035002 Formula is XP gained * 6c
     return static_cast<int32>(rewMoney * sWorld->getRate(RATE_REWARD_BONUS_MONEY));
 }

@@ -4232,13 +4232,13 @@ void ObjectMgr::LoadPetLevelInfo()
         }
 
         uint32 current_level = fields[1].Get<uint8>();
-        if (current_level > sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL))
+        if (current_level > GetMaxPlayerLevelForData())
         {
             if (current_level > STRONG_MAX_LEVEL)        // hardcoded level maximum
                 LOG_ERROR("sql.sql", "Wrong (> {}) level {} in `pet_levelstats` table, ignoring.", STRONG_MAX_LEVEL, current_level);
             else
             {
-                LOG_DEBUG("sql.sql", "Unused (> MaxPlayerLevel in worldserver.conf) level {} in `pet_levelstats` table, ignoring.", current_level);
+                LOG_DEBUG("sql.sql", "Unused level {} in `pet_levelstats` table, ignoring.", current_level);
                 ++count;                                // make result loading percent "expected" correct in case disabled detail mode for example.
             }
             continue;
@@ -4252,7 +4252,7 @@ void ObjectMgr::LoadPetLevelInfo()
         PetLevelInfo*& pInfoMapEntry = _petInfoStore[creature_id];
 
         if (!pInfoMapEntry)
-            pInfoMapEntry = new PetLevelInfo[sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL)];
+            pInfoMapEntry = new PetLevelInfo[GetMaxPlayerLevelForData()];
 
         // data for level 1 stored in [0] array element, ...
         PetLevelInfo* pLevelInfo = &pInfoMapEntry[current_level - 1];
@@ -4283,7 +4283,7 @@ void ObjectMgr::LoadPetLevelInfo()
         }
 
         // fill level gaps
-        for (uint8 level = 1; level < sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL); ++level)
+        for (uint8 level = 1; level < GetMaxPlayerLevelForData(); ++level)
         {
             if (pInfo[level].health == 0)
             {
@@ -4299,8 +4299,8 @@ void ObjectMgr::LoadPetLevelInfo()
 
 PetLevelInfo const* ObjectMgr::GetPetLevelInfo(uint32 creature_id, uint8 level) const
 {
-    if (level > sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL))
-        level = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+    if (level > GetMaxPlayerLevelForData())
+        level = GetMaxPlayerLevelForData();
 
     PetLevelInfoContainer::const_iterator itr = _petInfoStore.find(creature_id);
     if (itr == _petInfoStore.end())
@@ -4810,12 +4810,12 @@ void ObjectMgr::LoadPlayerInfo()
             }
 
             uint32 current_level = fields[1].Get<uint8>();
-            if (current_level > sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL))
+            if (current_level > GetMaxPlayerLevelForData())
             {
                 if (current_level > STRONG_MAX_LEVEL) // hardcoded level maximum
                     LOG_ERROR("sql.sql", "Wrong (> {}) level {} in `player_class_stats` table, ignoring.", STRONG_MAX_LEVEL, current_level);
                 else
-                    LOG_DEBUG("sql.sql", "Unused (> MaxPlayerLevel in worldserver.conf) level {} in `player_class_stats` table, ignoring.", current_level);
+                    LOG_DEBUG("sql.sql", "Unused level {} in `player_class_stats` table, ignoring.", current_level);
 
                 continue;
             }
@@ -4825,7 +4825,7 @@ void ObjectMgr::LoadPlayerInfo()
                 if (PlayerInfo* info = _playerInfo[race][current_class])
                 {
                     if (!info->levelInfo)
-                        info->levelInfo = new PlayerLevelInfo[sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL)];
+                        info->levelInfo = new PlayerLevelInfo[GetMaxPlayerLevelForData()];
 
                     PlayerLevelInfo& levelInfo = info->levelInfo[current_level - 1];
                     for (int i = 0; i < MAX_STATS; ++i)
@@ -4837,7 +4837,7 @@ void ObjectMgr::LoadPlayerInfo()
             if (!info)
             {
                 info = new PlayerClassInfo();
-                info->levelInfo = new PlayerClassLevelInfo[sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL)];
+                info->levelInfo = new PlayerClassLevelInfo[GetMaxPlayerLevelForData()];
                 _playerClassInfo[current_class] = info;
             }
 
@@ -4890,7 +4890,7 @@ void ObjectMgr::LoadPlayerInfo()
                 }
 
                 // fill level gaps for stats
-                for (uint8 level = 1; level < sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL); ++level)
+                for (uint8 level = 1; level < GetMaxPlayerLevelForData(); ++level)
                 {
                     if ((info->levelInfo[level].stats[0] == 0 && class_ != CLASS_DEATH_KNIGHT) || (level >= sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL) && info->levelInfo[level].stats[0] == 0 && class_ == CLASS_DEATH_KNIGHT))
                     {
@@ -4900,7 +4900,7 @@ void ObjectMgr::LoadPlayerInfo()
                 }
 
                 // fill level gaps for health/mana
-                for (uint8 level = 1; level < sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL); ++level)
+                for (uint8 level = 1; level < GetMaxPlayerLevelForData(); ++level)
                 {
                     if ((pClassInfo->levelInfo[level].basehealth == 0 && class_ != CLASS_DEATH_KNIGHT) || (level >= sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL) && pClassInfo->levelInfo[level].basehealth == 0 && class_ == CLASS_DEATH_KNIGHT))
                     {
@@ -4920,8 +4920,9 @@ void ObjectMgr::LoadPlayerInfo()
     {
         uint32 oldMSTime = getMSTime();
 
-        _playerXPperLevel.resize(sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL));
-        for (uint8 level = 0; level < sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL); ++level)
+        // Materialize engine data independently of the realm's default earned-level cap.
+        _playerXPperLevel.resize(GetMaxPlayerLevelForData());
+        for (uint8 level = 0; level < GetMaxPlayerLevelForData(); ++level)
             _playerXPperLevel[level] = 0;
 
         //                                                 0    1
@@ -4943,13 +4944,13 @@ void ObjectMgr::LoadPlayerInfo()
             uint32 current_level = fields[0].Get<uint8>();
             uint32 current_xp    = fields[1].Get<uint32>();
 
-            if (current_level >= sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL))
+            if (current_level >= GetMaxPlayerLevelForData())
             {
                 if (current_level > STRONG_MAX_LEVEL)        // hardcoded level maximum
                     LOG_ERROR("sql.sql", "Wrong (> {}) level {} in `player_xp_for_level` table, ignoring.", STRONG_MAX_LEVEL, current_level);
                 else
                 {
-                    LOG_DEBUG("sql.sql", "Unused (> MaxPlayerLevel in worldserver.conf) level {} in `player_xp_for_levels` table, ignoring.", current_level);
+                    LOG_DEBUG("sql.sql", "Unused level {} in `player_xp_for_levels` table, ignoring.", current_level);
                     ++count;                                // make result loading percent "expected" correct in case disabled detail mode for example.
                 }
                 continue;
@@ -4960,7 +4961,7 @@ void ObjectMgr::LoadPlayerInfo()
         } while (result->NextRow());
 
         // fill level gaps
-        for (uint8 level = 1; level < sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL); ++level)
+        for (uint8 level = 1; level < GetMaxPlayerLevelForData(); ++level)
         {
             if (_playerXPperLevel[level] == 0)
             {
@@ -4981,8 +4982,8 @@ void ObjectMgr::GetPlayerClassLevelInfo(uint32 class_, uint8 level, PlayerClassL
 
     PlayerClassInfo const* pInfo = _playerClassInfo[class_];
 
-    if (level > sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL))
-        level = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+    if (level > GetMaxPlayerLevelForData())
+        level = GetMaxPlayerLevelForData();
 
     *info = pInfo->levelInfo[level - 1];
 }
@@ -4996,7 +4997,7 @@ void ObjectMgr::GetPlayerLevelInfo(uint32 race, uint32 class_, uint8 level, Play
     if (!pInfo)
         return;
 
-    if (level <= sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL))
+    if (level <= GetMaxPlayerLevelForData())
         *info = pInfo->levelInfo[level - 1];
     else
         BuildPlayerLevelInfo(race, class_, level, info);
@@ -5005,10 +5006,10 @@ void ObjectMgr::GetPlayerLevelInfo(uint32 race, uint32 class_, uint8 level, Play
 void ObjectMgr::BuildPlayerLevelInfo(uint8 race, uint8 _class, uint8 level, PlayerLevelInfo* info) const
 {
     // base data (last known level)
-    *info = _playerInfo[race][_class]->levelInfo[sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL) - 1];
+    *info = _playerInfo[race][_class]->levelInfo[GetMaxPlayerLevelForData() - 1];
 
     // if conversion from uint32 to uint8 causes unexpected behaviour, change lvl to uint32
-    for (uint8 lvl = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL) - 1; lvl < level; ++lvl)
+    for (uint8 lvl = GetMaxPlayerLevelForData() - 1; lvl < level; ++lvl)
     {
         switch (_class)
         {
@@ -8060,6 +8061,11 @@ void ObjectMgr::LoadExplorationBaseXP()
 uint32 ObjectMgr::GetBaseXP(uint8 level)
 {
     return _baseXPTable[level] ? _baseXPTable[level] : 0;
+}
+
+uint32 ObjectMgr::GetMaxPlayerLevelForData() const
+{
+    return std::max(uint32(DEFAULT_MAX_LEVEL), sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL));
 }
 
 uint32 ObjectMgr::GetXPForLevel(uint8 level) const

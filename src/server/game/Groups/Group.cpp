@@ -429,6 +429,10 @@ bool Group::AddMember(Player* player, uint8 roles /* = 0 */)
     if (!player)
         return false;
 
+    // Creating the first member cannot mix a group; Create asserts that its leader can be added.
+    if (!m_memberSlots.empty() && !sScriptMgr->OnPlayerCanGroupAccept(player, this))
+        return false;
+
     // Get first not-full group
     uint8 subGroup = 0;
     if (m_subGroupsCounts)

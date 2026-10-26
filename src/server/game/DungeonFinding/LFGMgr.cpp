@@ -1992,6 +1992,12 @@ namespace lfg
             return;
         }
 
+        if (!sScriptMgr->OnPlayerbotCanLFGMatch(proposal.queues))
+        {
+            RemoveProposal(itProposal, LFG_UPDATETYPE_PROPOSAL_FAILED);
+            return;
+        }
+
         bool sendUpdate = proposal.state != LFG_PROPOSAL_SUCCESS;
         proposal.state = LFG_PROPOSAL_SUCCESS;
         time_t joinTime = GameTime::GetGameTime().count();

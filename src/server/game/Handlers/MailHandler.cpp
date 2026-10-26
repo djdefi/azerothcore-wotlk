@@ -292,6 +292,12 @@ void WorldSession::HandleSendMail(WorldPacket& recvData)
         return;
     }
 
+    if (!sScriptMgr->CanMailTransfer(player->GetGUID(), receiverGuid))
+    {
+        player->SendMailResult(0, MAIL_SEND, MAIL_ERR_INTERNAL_ERROR);
+        return;
+    }
+
     player->SendMailResult(0, MAIL_SEND, MAIL_OK);
 
     if (HasPermission(rbac::RBAC_PERM_LOG_GM_TRADE))
@@ -452,6 +458,13 @@ void WorldSession::HandleMailReturnToSender(WorldPacket& recvData)
         return;
     }
 
+    if (m->IsSentByPlayer() && !sScriptMgr->CanMailTransfer(player->GetGUID(),
+        ObjectGuid(HighGuid::Player, m->sender)))
+    {
+        player->SendMailResult(mailId, MAIL_RETURNED_TO_SENDER, MAIL_ERR_INTERNAL_ERROR);
+        return;
+    }
+
     if (m->HasItems())
     {
         for (MailItemInfoVec::iterator itr = m->items.begin(); itr != m->items.end(); ++itr)
@@ -530,6 +543,12 @@ void WorldSession::HandleMailTakeItem(WorldPacket& recvData)
 
     Mail* m = player->GetMail(mailId);
     if (!m || m->state == MAIL_STATE_DELETED || m->deliver_time > GameTime::GetGameTime().count())
+    {
+        player->SendMailResult(mailId, MAIL_ITEM_TAKEN, MAIL_ERR_INTERNAL_ERROR);
+        return;
+    }
+
+    if (!sScriptMgr->CanMailClaim(player, m))
     {
         player->SendMailResult(mailId, MAIL_ITEM_TAKEN, MAIL_ERR_INTERNAL_ERROR);
         return;
@@ -647,6 +666,12 @@ void WorldSession::HandleMailTakeMoney(WorldPacket& recvData)
 
     Mail* m = player->GetMail(mailId);
     if (!m || m->state == MAIL_STATE_DELETED || m->deliver_time > GameTime::GetGameTime().count())
+    {
+        player->SendMailResult(mailId, MAIL_MONEY_TAKEN, MAIL_ERR_INTERNAL_ERROR);
+        return;
+    }
+
+    if (!sScriptMgr->CanMailClaim(player, m))
     {
         player->SendMailResult(mailId, MAIL_MONEY_TAKEN, MAIL_ERR_INTERNAL_ERROR);
         return;
@@ -836,6 +861,12 @@ void WorldSession::HandleMailCreateTextItem(WorldPacket& recvData)
 
     Mail* m = player->GetMail(mailId);
     if (!m || (m->body.empty() && !m->mailTemplateId) || m->state == MAIL_STATE_DELETED || m->deliver_time > GameTime::GetGameTime().count() || (m->checked & MAIL_CHECK_MASK_COPIED))
+    {
+        player->SendMailResult(mailId, MAIL_MADE_PERMANENT, MAIL_ERR_INTERNAL_ERROR);
+        return;
+    }
+
+    if (!sScriptMgr->CanMailClaim(player, m))
     {
         player->SendMailResult(mailId, MAIL_MADE_PERMANENT, MAIL_ERR_INTERNAL_ERROR);
         return;

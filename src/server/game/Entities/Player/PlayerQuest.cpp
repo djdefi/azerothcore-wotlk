@@ -763,9 +763,9 @@ void Player::RewardQuest(Quest const* quest, uint32 reward, Object* questGiver, 
 
     sScriptMgr->OnPlayerQuestComputeXP(this, quest, XP);
     int32 moneyRew = 0;
-    if (GetLevel() >= sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL) || sScriptMgr->OnPlayerShouldBeRewardedWithMoneyInsteadOfExp(this))
+    if (IsMaxLevel() || sScriptMgr->OnPlayerShouldBeRewardedWithMoneyInsteadOfExp(this))
     {
-        moneyRew = quest->GetRewMoneyMaxLevel();
+        moneyRew = quest->GetRewMoneyMaxLevel(GetEffectiveMaxLevel());
     }
     else
     {
@@ -2440,7 +2440,7 @@ void Player::SendQuestReward(Quest const* quest, uint32 XP)
     if (!IsMaxLevel())
         questGiverQuestComplete.Experience = XP;
     else
-        rewardMoney += quest->GetRewMoneyMaxLevel();
+        rewardMoney += quest->GetRewMoneyMaxLevel(GetEffectiveMaxLevel());
 
     questGiverQuestComplete.RewardMoney = rewardMoney;
     questGiverQuestComplete.RewardHonor = 10 * quest->CalculateHonorGain(GetQuestLevel(quest));

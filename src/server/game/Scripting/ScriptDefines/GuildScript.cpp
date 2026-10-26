@@ -79,6 +79,18 @@ bool ScriptMgr::CanGuildSendBankList(Guild const* guild, WorldSession* session, 
     CALL_ENABLED_BOOLEAN_HOOKS(GuildScript, GUILDHOOK_CAN_GUILD_SEND_BANK_LIST, !script->CanGuildSendBankList(guild, session, tabId, sendAllSlots));
 }
 
+bool ScriptMgr::CanGuildBankMoveItem(Guild* guild, Player* player, bool toChar, uint8 tabId, uint8 slotId)
+{
+    CALL_ENABLED_BOOLEAN_HOOKS(GuildScript, GUILDHOOK_CAN_BANK_MOVE_ITEM,
+        !script->CanGuildBankMoveItem(guild, player, toChar, tabId, slotId));
+}
+
+bool ScriptMgr::CanGuildBankMoney(Guild* guild, Player* player, uint32 amount, bool deposit, bool repair)
+{
+    CALL_ENABLED_BOOLEAN_HOOKS(GuildScript, GUILDHOOK_CAN_BANK_MONEY,
+        !script->CanGuildBankMoney(guild, player, amount, deposit, repair));
+}
+
 GuildScript::GuildScript(char const* name, std::vector<uint16> enabledHooks)
     : ScriptObject(name, GUILDHOOK_END)
 {

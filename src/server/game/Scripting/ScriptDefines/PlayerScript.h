@@ -507,6 +507,8 @@ public:
 
     virtual void OnPlayerFirstLogin(Player* /*player*/) { }
 
+    // Queried for earned XP, quest rewards, rest, exploration and the client max-level field.
+    // May run through const player queries: only adjust maxPlayerLevel, never mutate the player.
     virtual void OnPlayerSetMaxLevel(Player* /*player*/, uint32& /*maxPlayerLevel*/) { }
 
     [[nodiscard]] virtual bool OnPlayerCanJoinInBattlegroundQueue(Player* /*player*/, ObjectGuid /*BattlemasterGuid*/, BattlegroundTypeId /*BGTypeID*/, uint8 /*joinAsGroup*/, GroupJoinBattlegroundResult& /*err*/) { return true; }
@@ -530,6 +532,7 @@ public:
 
     [[nodiscard]] virtual bool OnPlayerCanGroupInvite(Player* /*player*/, std::string& /*membername*/) { return true; }
 
+    // Also queried before direct/native AddMember joins a nonempty group. Must not mutate player/group.
     [[nodiscard]] virtual bool OnPlayerCanGroupAccept(Player* /*player*/, Group* /*group*/) { return true; }
 
     [[nodiscard]] virtual bool OnPlayerCanSellItem(Player* /*player*/, Item* /*item*/, Creature* /*creature*/) { return true; }
@@ -650,6 +653,7 @@ public:
 
     [[nodiscard]] virtual bool OnPlayerCanEnterMap(Player* /*player*/, MapEntry const* /*entry*/, InstanceTemplate const* /*instance*/, MapDifficulty const* /*mapDiff*/, bool /*loginCheck*/) { return true; }
 
+    // Rechecked for both participants before accepting a trade.
     [[nodiscard]] virtual bool OnPlayerCanInitTrade(Player* /*player*/, Player* /*target*/) { return true; }
 
     /**

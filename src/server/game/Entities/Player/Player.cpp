@@ -2401,6 +2401,20 @@ void Player::SendLogXPGain(uint32 GivenXP, Unit* victim, uint32 BonusXP, bool re
     SendDirectMessage(&data);
 }
 
+uint32 Player::GetEffectiveMaxLevel() const
+{
+    uint32 maxLevel = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+    // The existing hook predates const player queries; implementations must only adjust maxLevel.
+    sScriptMgr->OnPlayerSetMaxLevel(const_cast<Player*>(this), maxLevel);
+    maxLevel = std::clamp(maxLevel, 1u, sObjectMgr->GetMaxPlayerLevelForData());
+
+    if (uint32 trialLevelCap = sWorld->getIntConfig(CONFIG_TRIAL_LEVEL_CAP))
+        if (GetSession()->IsTrialAccount())
+            maxLevel = std::min(maxLevel, trialLevelCap);
+
+    return maxLevel;
+}
+
 void Player::GiveXP(uint32 xp, Unit* victim, float group_rate, bool isLFGReward)
 {
     if (xp < 1)
@@ -2428,14 +2442,9 @@ void Player::GiveXP(uint32 xp, Unit* victim, float group_rate, bool isLFGReward)
     // Favored experience increase END
 
     // XP to money conversion processed in Player::RewardQuest
-    uint32 maxLevel = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+    uint32 maxLevel = GetEffectiveMaxLevel();
 
-    // Trial account level cap (0 disables the cap)
-    if (uint32 trialLevelCap = sWorld->getIntConfig(CONFIG_TRIAL_LEVEL_CAP))
-        if (GetSession()->IsTrialAccount())
-            maxLevel = std::min(maxLevel, trialLevelCap);
-
-    if (level >= maxLevel)
+    if (GetLevel() >= maxLevel || level >= maxLevel)
         return;
 
     if (HasPlayerFlag(PLAYER_FLAGS_PARTIAL_PLAY_TIME))
@@ -2461,18 +2470,18 @@ void Player::GiveXP(uint32 xp, Unit* victim, float group_rate, bool isLFGReward)
     uint32 nextLvlXP = GetUInt32Value(PLAYER_NEXT_LEVEL_XP);
     uint32 newXP = curXP + xp + bonus_xp;
 
-    while (newXP >= nextLvlXP && level < maxLevel)
+    while (nextLvlXP && newXP >= nextLvlXP && GetLevel() < maxLevel)
     {
+        uint8 oldLevel = GetLevel();
+        GiveLevel(oldLevel + 1);
+        if (GetLevel() == oldLevel)
+            break;
+
         newXP -= nextLvlXP;
-
-        if (level < maxLevel)
-            GiveLevel(level + 1);
-
-        level = GetLevel();
         nextLvlXP = GetUInt32Value(PLAYER_NEXT_LEVEL_XP);
     }
 
-    SetUInt32Value(PLAYER_XP, newXP);
+    SetUInt32Value(PLAYER_XP, GetLevel() >= maxLevel ? 0 : newXP);
 }
 
 // Update player to next level
@@ -2587,7 +2596,7 @@ void Player::GiveLevel(uint8 level)
 
 bool Player::IsMaxLevel() const
 {
-    return GetLevel() >= GetUInt32Value(PLAYER_FIELD_MAX_LEVEL);
+    return GetLevel() >= GetEffectiveMaxLevel();
 }
 
 void Player::InitTalentForLevel()
@@ -2621,9 +2630,7 @@ void Player::InitStatsForLevel(bool reapplyMods)
     PlayerLevelInfo info;
     sObjectMgr->GetPlayerLevelInfo(getRace(true), getClass(), GetLevel(), &info);
 
-    uint32 maxPlayerLevel = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
-    sScriptMgr->OnPlayerSetMaxLevel(this, maxPlayerLevel);
-    SetUInt32Value(PLAYER_FIELD_MAX_LEVEL, maxPlayerLevel);
+    SetUInt32Value(PLAYER_FIELD_MAX_LEVEL, GetEffectiveMaxLevel());
     SetUInt32Value(PLAYER_NEXT_LEVEL_XP, sObjectMgr->GetXPForLevel(GetLevel()));
 
     // reset before any aura state sources (health set/aura apply)
@@ -5971,7 +5978,8 @@ void Player::CheckAreaExploreAndOutdoor()
             uint8 playerLevel = GetLevel();
             sScriptMgr->OnPlayerBeforeGetLevelForXPGain(this, playerLevel);
 
-            if (playerLevel >= sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL))
+            uint32 maxLevel = GetEffectiveMaxLevel();
+            if (GetLevel() >= maxLevel || playerLevel >= maxLevel)
             {
                 SendExplorationExperience(areaId, 0);
             }
@@ -10382,7 +10390,7 @@ void Player::LeaveAllArenaTeams(ObjectGuid guid)
 void Player::SetRestBonus(float restBonusNew)
 {
     // Prevent resting on max level
-    if (GetLevel() >= sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL))
+    if (IsMaxLevel())
         restBonusNew = 0;
 
     if (restBonusNew < 0)
