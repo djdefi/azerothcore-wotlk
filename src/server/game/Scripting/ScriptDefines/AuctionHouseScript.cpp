@@ -19,6 +19,11 @@
 #include "ScriptMgr.h"
 #include "ScriptMgrMacros.h"
 
+bool ScriptMgr::CanAuctionSell(Player* player)
+{
+    CALL_ENABLED_BOOLEAN_HOOKS(AuctionHouseScript, AUCTIONHOUSEHOOK_CAN_SELL, !script->CanAuctionSell(player));
+}
+
 void ScriptMgr::OnAuctionAdd(AuctionHouseObject* ah, AuctionEntry* entry)
 {
     ASSERT(ah);

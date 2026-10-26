@@ -1707,6 +1707,12 @@ void Guild::HandleMemberDepositMoney(WorldSession* session, uint32 amount)
     // Call script after validation and before money transfer.
     sScriptMgr->OnGuildMemberDepositMoney(this, player, amount);
 
+    if (!sScriptMgr->CanGuildBankMoney(this, player, amount, true, false))
+    {
+        SendCommandResult(session, GUILD_COMMAND_MOVE_ITEM, ERR_GUILD_PERMISSIONS);
+        return;
+    }
+
     if (m_bankMoney > GUILD_BANK_MONEY_LIMIT - amount)
     {
         SendCommandResult(session, GUILD_COMMAND_MOVE_ITEM, ERR_GUILD_BANK_FULL);
@@ -1758,6 +1764,12 @@ bool Guild::HandleMemberWithdrawMoney(WorldSession* session, uint32 amount, bool
 
     // Call script after validation and before money transfer.
     sScriptMgr->OnGuildMemberWitdrawMoney(this, player, amount, repair);
+
+    if (!sScriptMgr->CanGuildBankMoney(this, player, amount, false, repair))
+    {
+        SendCommandResult(session, GUILD_COMMAND_MOVE_ITEM, ERR_GUILD_PERMISSIONS);
+        return false;
+    }
 
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 
@@ -2415,6 +2427,12 @@ void Guild::SwapItems(Player* player, uint8 tabId, uint8 slotId, uint8 destTabId
     if (tabId == destTabId && slotId == destSlotId)
         return;
 
+    if (!sScriptMgr->CanGuildBankMoveItem(this, player, false, tabId, slotId))
+    {
+        SendCommandResult(player->GetSession(), GUILD_COMMAND_MOVE_ITEM, ERR_GUILD_PERMISSIONS);
+        return;
+    }
+
     BankMoveItemData from(this, player, tabId, slotId);
     BankMoveItemData to(this, player, destTabId, destSlotId);
     _MoveItems(&from, &to, splitedAmount);
@@ -2424,6 +2442,12 @@ void Guild::SwapItemsWithInventory(Player* player, bool toChar, uint8 tabId, uin
 {
     if ((slotId >= GUILD_BANK_MAX_SLOTS && slotId != NULL_SLOT) || tabId >= _GetPurchasedTabsSize())
         return;
+
+    if (!sScriptMgr->CanGuildBankMoveItem(this, player, toChar, tabId, slotId))
+    {
+        SendCommandResult(player->GetSession(), GUILD_COMMAND_MOVE_ITEM, ERR_GUILD_PERMISSIONS);
+        return;
+    }
 
     BankMoveItemData bankData(this, player, tabId, slotId);
     PlayerMoveItemData charData(this, player, playerBag, playerSlotId);

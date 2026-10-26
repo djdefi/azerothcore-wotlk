@@ -38,6 +38,7 @@ enum AuctionHouseHook
     AUCTIONHOUSEHOOK_ON_BEFORE_AUCTIONHOUSEMGR_SEND_AUCTION_CANCELLED_TO_BIDDER_MAIL,
     AUCTIONHOUSEHOOK_ON_BEFORE_AUCTIONHOUSEMGR_UPDATE,
     AUCTIONHOUSEHOOK_ON_BEFORE_AUCTION_FINALIZATION,
+    AUCTIONHOUSEHOOK_CAN_SELL,
     AUCTIONHOUSEHOOK_END
 };
 
@@ -47,6 +48,9 @@ protected:
     AuctionHouseScript(char const* name, std::vector<uint16> enabledHooks = std::vector<uint16>());
 
 public:
+    // Call before charging a deposit or removing inventory, including native auction producers.
+    [[nodiscard]] virtual bool CanAuctionSell(Player* /*player*/) { return true; }
+
     // Called when an auction is added to an auction house.
     virtual void OnAuctionAdd(AuctionHouseObject* /*ah*/, AuctionEntry* /*entry*/) { }
 

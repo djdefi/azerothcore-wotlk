@@ -115,6 +115,7 @@ protected:
 public:
     bool IsDatabaseBound() const { return false; }
 
+    // Checked before proposal creation and again before accepting the proposal.
     [[nodiscard]] virtual bool OnPlayerbotCheckLFGQueue(lfg::Lfg5Guids const& /*guidsList*/) { return true; }
     virtual void OnPlayerbotCheckKillTask(Player* /*player*/, Unit* /*victim*/) { }
     virtual void OnPlayerbotCheckPetitionAccount(Player* /*player*/, bool& /*found*/) { }
@@ -277,6 +278,7 @@ public: /* WeatherScript */
     void OnWeatherUpdate(Weather* weather, uint32 diff);
 
 public: /* AuctionHouseScript */
+    bool CanAuctionSell(Player* player);
     void OnAuctionAdd(AuctionHouseObject* ah, AuctionEntry* entry);
     void OnAuctionRemove(AuctionHouseObject* ah, AuctionEntry* entry);
     void OnAuctionSuccessful(AuctionHouseObject* ah, AuctionEntry* entry);
@@ -536,6 +538,8 @@ public: /* GuildScript */
     void OnGuildEvent(Guild* guild, uint8 eventType, ObjectGuid::LowType playerGuid1, ObjectGuid::LowType playerGuid2, uint8 newRank);
     void OnGuildBankEvent(Guild* guild, uint8 eventType, uint8 tabId, ObjectGuid::LowType playerGuid, uint32 itemOrMoney, uint16 itemStackCount, uint8 destTabId);
     bool CanGuildSendBankList(Guild const* guild, WorldSession* session, uint8 tabId, bool sendAllSlots);
+    bool CanGuildBankMoveItem(Guild* guild, Player* player, bool toChar, uint8 tabId, uint8 slotId);
+    bool CanGuildBankMoney(Guild* guild, Player* player, uint32 amount, bool deposit, bool repair);
 
 public: /* GroupScript */
     void OnGroupAddMember(Group* group, ObjectGuid guid);
@@ -678,6 +682,8 @@ public: /* GameEventScript */
     void OnGameEventCheck(uint16 EventID);
 
 public: /* MailScript */
+    bool CanMailTransfer(ObjectGuid sender, ObjectGuid receiver);
+    bool CanMailClaim(Player* player, Mail const* mail);
     void OnBeforeMailDraftSendMailTo(MailDraft* mailDraft, MailReceiver const& receiver, MailSender const& sender, MailCheckMask& checked, uint32& deliver_delay, uint32& custom_expiration, bool& deleteMailItemsFromDB, bool& sendMail);
 
 public: /* AchievementScript */

@@ -116,6 +116,13 @@ void WorldSession::SendAuctionOwnerNotification(AuctionEntry* auction)
 //this void creates new auction and adds auction to some auctionhouse
 void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
 {
+    if (!sScriptMgr->CanAuctionSell(GetPlayer()))
+    {
+        recvData.rfinish();
+        SendAuctionCommandResult(0, AUCTION_SELL_ITEM, ERR_AUCTION_RESTRICTED_ACCOUNT);
+        return;
+    }
+
     ObjectGuid auctioneer;
     uint32 itemsCount, etime, bid, buyout;
     recvData >> auctioneer;

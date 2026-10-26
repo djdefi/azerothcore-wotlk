@@ -114,6 +114,7 @@ struct LootItem;
 struct LootStoreItem;
 struct MapDifficulty;
 struct MapEntry;
+struct Mail;
 struct MovementInfo;
 struct PvPDifficultyEntry;
 struct QuestStatusData;

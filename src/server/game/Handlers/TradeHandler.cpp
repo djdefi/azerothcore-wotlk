@@ -339,6 +339,13 @@ void WorldSession::HandleAcceptTradeOpcode(WorldPacket& /*recvPacket*/)
 
     if (his_trade->IsAccepted())
     {
+        if (!sScriptMgr->OnPlayerCanInitTrade(_player, trader) ||
+            !sScriptMgr->OnPlayerCanInitTrade(trader, _player))
+        {
+            _player->TradeCancel(true);
+            return;
+        }
+
         setAcceptTradeMode(my_trade, his_trade, myItems, hisItems);
 
         Spell* my_spell = nullptr;

@@ -1123,6 +1123,8 @@ public:
     std::string GeneratePetNameLocale(uint32 entry, LocaleConstant locale);
     uint32 GetBaseXP(uint8 level);
     [[nodiscard]] uint32 GetXPForLevel(uint8 level) const;
+    // Loaded stats/XP ceiling, independent of a character's earned-level cap.
+    [[nodiscard]] uint32 GetMaxPlayerLevelForData() const;
 
     [[nodiscard]] int32 GetFishingBaseSkillLevel(uint32 entry) const
     {

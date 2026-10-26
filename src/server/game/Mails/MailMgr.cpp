@@ -23,6 +23,7 @@
 #include "Log.h"
 #include "Mail.h"
 #include "ObjectAccessor.h"
+#include "ScriptMgr.h"
 #include "Timer.h"
 #include <map>
 
@@ -159,6 +160,13 @@ void MailMgr::ReturnOrDeleteOldMails(bool serverUp)
             }
             else
             {
+                if (!sScriptMgr->CanMailTransfer(ObjectGuid(HighGuid::Player, m->receiver),
+                    ObjectGuid(HighGuid::Player, m->sender)))
+                {
+                    delete m;
+                    continue;
+                }
+
                 // Mail will be returned
                 stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_MAIL_RETURNED);
                 stmt->SetData(0, m->receiver);

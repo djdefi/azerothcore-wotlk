@@ -269,7 +269,7 @@ public:
     [[nodiscard]] int32  GetRewOrReqMoney(uint8 playerLevel = 0) const;
     [[nodiscard]] uint32 GetRewHonorAddition() const { return RewardHonor; }
     [[nodiscard]] float GetRewHonorMultiplier() const { return RewardKillHonor; }
-    [[nodiscard]] uint32 GetRewMoneyMaxLevel() const; // use in XP calculation at client
+    [[nodiscard]] uint32 GetRewMoneyMaxLevel(uint8 maxLevel = 0) const; // use in XP calculation at client
     [[nodiscard]] uint32 GetRewSpell() const { return RewardDisplaySpell; }
     [[nodiscard]] int32  GetRewSpellCast() const { return RewardSpell; }
     [[nodiscard]] uint32 GetRewMailTemplateId() const { return RewardMailTemplateId; }

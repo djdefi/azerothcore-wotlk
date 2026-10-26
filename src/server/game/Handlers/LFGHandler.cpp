@@ -194,7 +194,7 @@ void WorldSession::HandleLfgPlayerLockInfoRequestOpcode(WorldPacket& /*recvData*
 
             data << uint8(done);
             data << uint32(quest->GetRewOrReqMoney(playerLevel));
-            if (playerLevelForXP < GetPlayer()->GetUInt32Value(PLAYER_FIELD_MAX_LEVEL))
+            if (!GetPlayer()->IsMaxLevel() && playerLevelForXP < GetPlayer()->GetEffectiveMaxLevel())
                 data << uint32(quest->XPValue(playerLevelForXP));
             else
                 data << uint32(0);

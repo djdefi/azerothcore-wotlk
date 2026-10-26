@@ -18,12 +18,15 @@
 #ifndef SCRIPT_OBJECT_MAIL_SCRIPT_H_
 #define SCRIPT_OBJECT_MAIL_SCRIPT_H_
 
+#include "ObjectGuid.h"
 #include "ScriptObject.h"
 #include <vector>
 
 enum MailHook
 {
     MAILHOOK_ON_BEFORE_MAIL_DRAFT_SEND_MAIL_TO,
+    MAILHOOK_CAN_TRANSFER,
+    MAILHOOK_CAN_CLAIM,
     MAILHOOK_END
 };
 
@@ -33,6 +36,13 @@ protected:
     MailScript(char const* name, std::vector<uint16> enabledHooks = std::vector<uint16>());
 
 public:
+    // Call before normal mail debits/removes assets, including native producers and returns.
+    // Both GUIDs identify characters and may be offline. A denial leaves the source assets untouched.
+    [[nodiscard]] virtual bool CanMailTransfer(ObjectGuid /*sender*/, ObjectGuid /*receiver*/) { return true; }
+
+    // Runs before claiming money/items or paying COD, including mail created before a policy change.
+    [[nodiscard]] virtual bool CanMailClaim(Player* /*player*/, Mail const* /*mail*/) { return true; }
+
     // Called before mail is sent
     virtual void OnBeforeMailDraftSendMailTo(MailDraft* /*mailDraft*/, MailReceiver const& /*receiver*/, MailSender const& /*sender*/, MailCheckMask& /*checked*/, uint32& /*deliver_delay*/, uint32& /*custom_expiration*/, bool& /*deleteMailItemsFromDB*/, bool& /*sendMail*/) { }
 };

@@ -1192,6 +1192,7 @@ public:
     void SetPvPDeath(bool on) { if (on) m_ExtraFlags |= PLAYER_EXTRA_PVP_DEATH; else m_ExtraFlags &= ~PLAYER_EXTRA_PVP_DEATH; }
 
     void GiveXP(uint32 xp, Unit* victim, float group_rate = 1.0f, bool isLFGReward = false);
+    [[nodiscard]] uint32 GetEffectiveMaxLevel() const;
     void GiveLevel(uint8 level);
 
     void InitStatsForLevel(bool reapplyMods = false);

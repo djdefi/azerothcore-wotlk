@@ -36,6 +36,8 @@ enum GuildHook
     GUILDHOOK_ON_EVENT,
     GUILDHOOK_ON_BANK_EVENT,
     GUILDHOOK_CAN_GUILD_SEND_BANK_LIST,
+    GUILDHOOK_CAN_BANK_MOVE_ITEM,
+    GUILDHOOK_CAN_BANK_MONEY,
     GUILDHOOK_END
 };
 
@@ -79,6 +81,12 @@ public:
     virtual void OnBankEvent(Guild* /*guild*/, uint8 /*eventType*/, uint8 /*tabId*/, ObjectGuid::LowType /*playerGuid*/, uint32 /*itemOrMoney*/, uint16 /*itemStackCount*/, uint8 /*destTabId*/) { }
 
     [[nodiscard]] virtual bool CanGuildSendBankList(Guild const* /*guild*/, WorldSession* /*session*/, uint8 /*tabId*/, bool /*sendAllSlots*/) { return true; }
+
+    // Synchronous preflight, before cloning/removing items or changing money.
+    [[nodiscard]] virtual bool CanGuildBankMoveItem(Guild* /*guild*/, Player* /*player*/, bool /*toChar*/,
+        uint8 /*tabId*/, uint8 /*slotId*/) { return true; }
+    [[nodiscard]] virtual bool CanGuildBankMoney(Guild* /*guild*/, Player* /*player*/, uint32 /*amount*/,
+        bool /*deposit*/, bool /*repair*/) { return true; }
 };
 
 #endif

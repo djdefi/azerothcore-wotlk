@@ -968,7 +968,7 @@ void ScriptMgr::OnPlayerLearnTaxiNode(Player const* player, uint32 nodeId)
 void ScriptMgr::OnPlayerBeforeGetLevelForXPGain(Player const* player, uint8& level)
 {
     CALL_ENABLED_HOOKS(PlayerScript, PLAYERHOOK_ON_BEFORE_GET_LEVEL_FOR_XP_GAIN, script->OnPlayerBeforeGetLevelForXPGain(player, level));
-    level = std::clamp(level, uint8(1), uint8(sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL)));
+    level = std::clamp(level, uint8(1), uint8(player->GetEffectiveMaxLevel()));
 }
 
 void ScriptMgr::OnPlayerAfterTakeItemFromMail(Player* player, Item* item, uint32 count)
