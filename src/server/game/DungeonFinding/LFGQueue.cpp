@@ -425,7 +425,8 @@ namespace lfg
         if (!sLFGMgr->AllQueued(check)) // can't create proposal
             return LFG_COMPATIBILITY_PENDING;
 
-        if (!sScriptMgr->OnPlayerbotCheckLFGQueue(proposal.queues))
+        if (!sScriptMgr->OnPlayerbotCanLFGMatch(proposal.queues) ||
+            !sScriptMgr->OnPlayerbotCheckLFGQueue(proposal.queues))
         {
             return LFG_INCOMPATIBLES_HAS_IGNORES;
         }

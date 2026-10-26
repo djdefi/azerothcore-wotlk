@@ -29,6 +29,11 @@ bool ScriptMgr::CanMailClaim(Player* player, Mail const* mail)
     CALL_ENABLED_BOOLEAN_HOOKS(MailScript, MAILHOOK_CAN_CLAIM, !script->CanMailClaim(player, mail));
 }
 
+bool ScriptMgr::CanMailExpire(Mail const* mail)
+{
+    CALL_ENABLED_BOOLEAN_HOOKS(MailScript, MAILHOOK_CAN_EXPIRE, !script->CanMailExpire(mail));
+}
+
 void ScriptMgr::OnBeforeMailDraftSendMailTo(MailDraft* mailDraft, MailReceiver const& receiver, MailSender const& sender, MailCheckMask& checked, uint32& deliver_delay, uint32& custom_expiration, bool& deleteMailItemsFromDB, bool& sendMail)
 {
     CALL_ENABLED_HOOKS(MailScript, MAILHOOK_ON_BEFORE_MAIL_DRAFT_SEND_MAIL_TO, script->OnBeforeMailDraftSendMailTo(mailDraft, receiver, sender, checked, deliver_delay, custom_expiration, deleteMailItemsFromDB, sendMail));

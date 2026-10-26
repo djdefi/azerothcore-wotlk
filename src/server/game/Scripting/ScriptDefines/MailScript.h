@@ -27,6 +27,7 @@ enum MailHook
     MAILHOOK_ON_BEFORE_MAIL_DRAFT_SEND_MAIL_TO,
     MAILHOOK_CAN_TRANSFER,
     MAILHOOK_CAN_CLAIM,
+    MAILHOOK_CAN_EXPIRE,
     MAILHOOK_END
 };
 
@@ -42,6 +43,9 @@ public:
 
     // Runs before claiming money/items or paying COD, including mail created before a policy change.
     [[nodiscard]] virtual bool CanMailClaim(Player* /*player*/, Mail const* /*mail*/) { return true; }
+
+    // May run offline. Denial retains the expired mail and assets without returning or deleting them.
+    [[nodiscard]] virtual bool CanMailExpire(Mail const* /*mail*/) { return true; }
 
     // Called before mail is sent
     virtual void OnBeforeMailDraftSendMailTo(MailDraft* /*mailDraft*/, MailReceiver const& /*receiver*/, MailSender const& /*sender*/, MailCheckMask& /*checked*/, uint32& /*deliver_delay*/, uint32& /*custom_expiration*/, bool& /*deleteMailItemsFromDB*/, bool& /*sendMail*/) { }

@@ -6359,13 +6359,14 @@ void Player::_LoadMail(PreparedQueryResult mailsResult, PreparedQueryResult mail
             m->checked        = fields[10].Get<uint8>();
             m->stationery     = fields[11].Get<uint8>();
             m->mailTemplateId = fields[12].Get<int16>();
+            m->state          = MAIL_STATE_UNCHANGED;
             bool has_items    = fields[13].Get<bool>();
 
             if (cur_time > m->expire_time)
             {
                 // Drop empty expired mail now; mail with items or money is left
                 // for ReturnOrDeleteOldMails, which owns return-to-sender handling
-                if (!has_items && !m->money && !m->COD)
+                if (!has_items && !m->money && !m->COD && sScriptMgr->CanMailExpire(m))
                 {
                     LOG_DEBUG("entities.player", "Player::_LoadMail: Mail ({}) has expired - deleted.", m->messageID);
                     sMailMgr->DeleteEmptyExpiredMail(m->messageID, GetGUID().GetCounter());
@@ -6382,8 +6383,6 @@ void Player::_LoadMail(PreparedQueryResult mailsResult, PreparedQueryResult mail
                 LOG_ERROR("entities.player", "Player::_LoadMail: Mail ({}) has nonexistent MailTemplateId ({}), remove at load", m->messageID, m->mailTemplateId);
                 m->mailTemplateId = 0;
             }
-
-            m->state = MAIL_STATE_UNCHANGED;
 
             m_mail.push_back(m);
             mailById[m->messageID] = m;

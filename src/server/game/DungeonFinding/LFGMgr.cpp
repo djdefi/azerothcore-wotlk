@@ -1992,7 +1992,7 @@ namespace lfg
             return;
         }
 
-        if (!sScriptMgr->OnPlayerbotCheckLFGQueue(proposal.queues))
+        if (!sScriptMgr->OnPlayerbotCanLFGMatch(proposal.queues))
         {
             RemoveProposal(itProposal, LFG_UPDATETYPE_PROPOSAL_FAILED);
             return;

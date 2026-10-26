@@ -115,8 +115,9 @@ protected:
 public:
     bool IsDatabaseBound() const { return false; }
 
-    // Checked before proposal creation and again before accepting the proposal.
     [[nodiscard]] virtual bool OnPlayerbotCheckLFGQueue(lfg::Lfg5Guids const& /*guidsList*/) { return true; }
+    // Read-only compatibility check, before reservations and again before proposal success.
+    [[nodiscard]] virtual bool OnPlayerbotCanLFGMatch(lfg::Lfg5Guids const& /*guidsList*/) { return true; }
     virtual void OnPlayerbotCheckKillTask(Player* /*player*/, Unit* /*victim*/) { }
     virtual void OnPlayerbotCheckPetitionAccount(Player* /*player*/, bool& /*found*/) { }
     [[nodiscard]] virtual bool OnPlayerbotCheckUpdatesToSend(Player* /*player*/) { return true; }
@@ -684,6 +685,7 @@ public: /* GameEventScript */
 public: /* MailScript */
     bool CanMailTransfer(ObjectGuid sender, ObjectGuid receiver);
     bool CanMailClaim(Player* player, Mail const* mail);
+    bool CanMailExpire(Mail const* mail);
     void OnBeforeMailDraftSendMailTo(MailDraft* mailDraft, MailReceiver const& receiver, MailSender const& sender, MailCheckMask& checked, uint32& deliver_delay, uint32& custom_expiration, bool& deleteMailItemsFromDB, bool& sendMail);
 
 public: /* AchievementScript */
@@ -770,6 +772,7 @@ public: /* LootScript */
 public: /* PlayerbotScript */
     
     bool OnPlayerbotCheckLFGQueue(lfg::Lfg5Guids const& guidsList);
+    bool OnPlayerbotCanLFGMatch(lfg::Lfg5Guids const& guidsList);
     void OnPlayerbotCheckKillTask(Player* player, Unit* victim);
     void OnPlayerbotCheckPetitionAccount(Player* player, bool& found);
     bool OnPlayerbotCheckUpdatesToSend(Player* player);
