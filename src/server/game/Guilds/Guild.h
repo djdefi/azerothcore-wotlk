@@ -784,6 +784,8 @@ public:
     time_t GetCreatedDate() const { return m_createdDate; }
 
     // Bank tabs
+    // Adds only VIEW, preserving other rights and limits. Callers must enforce authorization.
+    bool GrantBankTabView(uint8 rankId, uint8 tabId);
     void SetBankTabText(uint8 tabId, std::string_view text);
 
     void ResetTimes();
