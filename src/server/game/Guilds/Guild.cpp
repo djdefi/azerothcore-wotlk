@@ -1439,6 +1439,27 @@ void Guild::HandleSetRankInfo(uint8 rankId, uint32 rights, std::string_view name
     }
 }
 
+bool Guild::GrantBankTabView(uint8 rankId, uint8 tabId)
+{
+    RankInfo* rankInfo = GetRankInfo(rankId);
+    if (!rankInfo || tabId >= _GetPurchasedTabsSize())
+        return false;
+
+    uint8 rights = rankInfo->GetBankTabRights(tabId);
+    if (rights & GUILD_BANK_RIGHT_VIEW_TAB)
+        return true;
+
+    // The native setter would normalize guild-master rights and slots, not just VIEW.
+    if (rankId == GR_GUILDMASTER)
+        return false;
+
+    _SetRankBankTabRightsAndSlots(rankId,
+        GuildBankRightsAndSlots(tabId, rights | GUILD_BANK_RIGHT_VIEW_TAB, rankInfo->GetBankTabSlotsPerDay(tabId)));
+    _BroadcastEvent(GE_RANK_UPDATED, ObjectGuid::Empty, std::to_string(rankId), rankInfo->GetName(),
+        std::to_string(m_ranks.size()));
+    return true;
+}
+
 void Guild::HandleBuyBankTab(WorldSession* session, uint8 tabId)
 {
     Player* player = session->GetPlayer();
